@@ -11,6 +11,7 @@ const NodeType = enum {
     mul,
     div,
     pow,
+    log, // Natural logarithm - needed for power gradients
     custom, // For user-defined operations
 };
 
@@ -514,6 +515,11 @@ const ComputationGraph = struct {
                 defer self.allocator.free(right);
                 break :blk try std.fmt.allocPrint(self.allocator, "({s} ^ {s})", .{ left, right });
             },
+            .log => blk: {
+                const arg = try self.nodeToString(node.inputs[0]);
+                defer self.allocator.free(arg);
+                break :blk try std.fmt.allocPrint(self.allocator, "log({s})", .{arg});
+            },
             .custom => blk: {
                 const op_name = node.custom_op_name orelse return error.MissingCustomOpName;
                 const op = self.registry.get(op_name) orelse return error.UnknownCustomOp;
@@ -567,6 +573,19 @@ const ComputationGraph = struct {
         return id;
     }
 
+    pub fn addUnaryOp(self: *ComputationGraph, op: NodeType, operand: NodeId) !NodeId {
+        const id = @as(NodeId, @intCast(self.nodes.items.len));
+        try self.nodes.append(self.allocator, .{
+            .node_type = op,
+            .inputs = .{ operand, 0 },
+            .custom_inputs = null,
+            .value = undefined,
+            .name = "",
+            .custom_op_name = null,
+        });
+        return id;
+    }
+
     pub fn addBinaryOp(self: *ComputationGraph, op: NodeType, left: NodeId, right: NodeId) !NodeId {
         const id = @as(NodeId, @intCast(self.nodes.items.len));
         try self.nodes.append(self.allocator, .{
@@ -609,6 +628,7 @@ const ComputationGraph = struct {
                 .mul => values[node.inputs[0]] * values[node.inputs[1]],
                 .div => values[node.inputs[0]] / values[node.inputs[1]],
                 .pow => std.math.pow(f32, values[node.inputs[0]], values[node.inputs[1]]),
+                .log => @log(values[node.inputs[0]]),
                 .custom => blk: {
                     const op_name = node.custom_op_name orelse return error.MissingCustomOpName;
                     const op = self.registry.get(op_name) orelse return error.UnknownCustomOp;
@@ -669,6 +689,10 @@ const ComputationGraph = struct {
                     adjoints[node.inputs[0]] += grd * b * std.math.pow(f32, a, b - 1.0);
                     adjoints[node.inputs[1]] += grd * result * @log(a);
                 },
+                .log => {
+                    const a = values[node.inputs[0]];
+                    adjoints[node.inputs[0]] += grd / a;
+                },
                 .custom => {
                     const op_name = node.custom_op_name orelse continue;
                     const op = self.registry.get(op_name) orelse continue;
@@ -704,6 +728,7 @@ const ComputationGraph = struct {
 
     pub fn symbolicGrad(self: *ComputationGraph, wrt: []const u8) !ComputationGraph {
         var grad_graph = ComputationGraph.init(self.allocator, self.registry);
+        errdefer grad_graph.deinit();
 
         var grad_node_map = std.AutoHashMap(NodeId, NodeId).init(self.allocator);
         defer grad_node_map.deinit();
@@ -783,10 +808,19 @@ const ComputationGraph = struct {
 
                     // Gradient w.r.t. exponent: grad * a^b * ln(a)
                     const a_pow_b = try grad_graph.addBinaryOp(.pow, a_node_in_grad, b_node_in_grad);
-                    const log_a = try grad_graph.addCustomOp("log", &[_]NodeId{a_node_in_grad});
+                    const log_a = try grad_graph.addUnaryOp(.log, a_node_in_grad);
                     const deriv_b = try grad_graph.addBinaryOp(.mul, a_pow_b, log_a);
                     const grad_b = try grad_graph.addBinaryOp(.mul, grad_of_node, deriv_b);
                     try accumulateGradient(&grad_graph, &grad_node_map, b_id, grad_b);
+                },
+                .log => {
+                    const a_id = node.inputs[0];
+                    const a_node_in_grad = try getOrCopyNode(self, &grad_graph, &orig_to_new, a_id);
+
+                    // Gradient of log(a) w.r.t. a is 1/a
+                    const deriv = try grad_graph.addBinaryOp(.div, try grad_graph.addConstant(1.0), a_node_in_grad);
+                    const grad_a = try grad_graph.addBinaryOp(.mul, grad_of_node, deriv);
+                    try accumulateGradient(&grad_graph, &grad_node_map, a_id, grad_a);
                 },
                 .custom => {
                     const op_name = node.custom_op_name orelse continue;
@@ -818,14 +852,10 @@ const ComputationGraph = struct {
                             try accumulateGradient(&grad_graph, &grad_node_map, input_id, grad_input);
                         }
                     } else {
-                        // Custom op has no symbolic gradient form (toStringGrad is null).
-                        // We cannot build a correct symbolic expression without it.
+                        // Custom op lacks toStringGrad - cannot build symbolic gradient.
                         // The numeric backward() is still available via ComputationGraph.gradient()
                         // which uses the .backward implementation correctly.
-                        // For now, skip symbolic gradient computation for this op - the gradient
-                        // graph will be incomplete but at least not mathematically incorrect.
-                        // TODO: Consider building constant nodes based on current input values,
-                        // but that would make the gradient graph context-dependent.
+                        return error.SymbolicGradientUnsupported;
                     }
                 },
             }
@@ -881,6 +911,10 @@ fn getOrCopyNode(
             const left = try getOrCopyNode(orig_graph, grad_graph, orig_to_new, orig_node.inputs[0]);
             const right = try getOrCopyNode(orig_graph, grad_graph, orig_to_new, orig_node.inputs[1]);
             break :blk try grad_graph.addBinaryOp(orig_node.node_type, left, right);
+        },
+        .log => blk: {
+            const operand = try getOrCopyNode(orig_graph, grad_graph, orig_to_new, orig_node.inputs[0]);
+            break :blk try grad_graph.addUnaryOp(.log, operand);
         },
         .custom => blk: {
             const op_name = orig_node.custom_op_name orelse return error.MissingCustomOpName;

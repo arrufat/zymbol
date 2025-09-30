@@ -106,6 +106,8 @@ pub fn main() !void {
         try inputs.put("y", 5.0);
 
         std.debug.print("  f(3, 5) = {d}\n", .{try f.eval(inputs)});
+        // Note: max() lacks toStringGrad, so symbolic grad fails
+        // But numeric gradient() still works via backward()
         std.debug.print("  df/dx(3, 5) = {d} (expected: 0)\n", .{try f.gradient("x", inputs)});
         std.debug.print("  df/dy(3, 5) = {d} (expected: 1)\n\n", .{try f.gradient("y", inputs)});
     }
@@ -192,6 +194,21 @@ pub fn main() !void {
         defer allocator.free(df_dy_str);
         std.debug.print("  df/dy = {s}\n", .{df_dy_str});
         // x^y * ln(x) = 9 * ln(3) = 9 * 1.099... = 9.887...
-        std.debug.print("  df/dy(3, 2) = {d} (expected: ~9.887)\n", .{try df_dy.eval(inputs)});
+        std.debug.print("  df/dy(3, 2) = {d} (expected: ~9.887)\n\n", .{try df_dy.eval(inputs)});
+    }
+
+    // Example 8: Demonstrate symbolic grad error for ops without toStringGrad
+    std.debug.print("Example 8: Symbolic gradient limitation\n", .{});
+    {
+        var f = try parse(allocator, &registry, "max(x, y)");
+        defer f.deinit();
+
+        std.debug.print("  Attempting grad(max(x, y), 'x')...\n", .{});
+        if (grad(&f, "x")) |_| {
+            std.debug.print("  ERROR: Should have failed!\n", .{});
+        } else |err| {
+            std.debug.print("  Expected error: {s}\n", .{@errorName(err)});
+            std.debug.print("  Note: Use f.gradient() for numeric gradients instead.\n", .{});
+        }
     }
 }
