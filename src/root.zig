@@ -774,11 +774,19 @@ const ComputationGraph = struct {
                     const a_node_in_grad = try getOrCopyNode(self, &grad_graph, &orig_to_new, a_id);
                     const b_node_in_grad = try getOrCopyNode(self, &grad_graph, &orig_to_new, b_id);
 
+                    // Gradient w.r.t. base: grad * b * a^(b-1)
                     const b_minus_1 = try grad_graph.addBinaryOp(.sub, b_node_in_grad, try grad_graph.addConstant(1.0));
                     const a_pow_b_minus_1 = try grad_graph.addBinaryOp(.pow, a_node_in_grad, b_minus_1);
                     const deriv_a = try grad_graph.addBinaryOp(.mul, b_node_in_grad, a_pow_b_minus_1);
                     const grad_a = try grad_graph.addBinaryOp(.mul, grad_of_node, deriv_a);
                     try accumulateGradient(&grad_graph, &grad_node_map, a_id, grad_a);
+
+                    // Gradient w.r.t. exponent: grad * a^b * ln(a)
+                    const a_pow_b = try grad_graph.addBinaryOp(.pow, a_node_in_grad, b_node_in_grad);
+                    const log_a = try grad_graph.addCustomOp("log", &[_]NodeId{a_node_in_grad});
+                    const deriv_b = try grad_graph.addBinaryOp(.mul, a_pow_b, log_a);
+                    const grad_b = try grad_graph.addBinaryOp(.mul, grad_of_node, deriv_b);
+                    try accumulateGradient(&grad_graph, &grad_node_map, b_id, grad_b);
                 },
                 .custom => {
                     const op_name = node.custom_op_name orelse continue;
@@ -810,11 +818,14 @@ const ComputationGraph = struct {
                             try accumulateGradient(&grad_graph, &grad_node_map, input_id, grad_input);
                         }
                     } else {
-                        // Fallback: numeric differentiation (less useful for symbolic)
-                        // Just create placeholder gradient nodes
-                        for (input_ids) |input_id| {
-                            try accumulateGradient(&grad_graph, &grad_node_map, input_id, grad_of_node);
-                        }
+                        // Custom op has no symbolic gradient form (toStringGrad is null).
+                        // We cannot build a correct symbolic expression without it.
+                        // The numeric backward() is still available via ComputationGraph.gradient()
+                        // which uses the .backward implementation correctly.
+                        // For now, skip symbolic gradient computation for this op - the gradient
+                        // graph will be incomplete but at least not mathematically incorrect.
+                        // TODO: Consider building constant nodes based on current input values,
+                        // but that would make the gradient graph context-dependent.
                     }
                 },
             }
