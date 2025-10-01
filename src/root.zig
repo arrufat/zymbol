@@ -347,11 +347,19 @@ const ComputationGraph = struct {
         return try self.nodeToString(self.output_id);
     }
 
+    fn binaryOpToString(self: *ComputationGraph, left_id: NodeId, right_id: NodeId, op_symbol: []const u8) ![]u8 {
+        const left = try self.nodeToString(left_id);
+        defer self.allocator.free(left);
+        const right = try self.nodeToString(right_id);
+        defer self.allocator.free(right);
+        return try std.fmt.allocPrint(self.allocator, "({s} {s} {s})", .{ left, op_symbol, right });
+    }
+
     fn nodeToString(self: *ComputationGraph, node_id: NodeId) error{ OutOfMemory, MissingCustomOpName, UnknownCustomOp }![]u8 {
         const node = self.nodes.items[node_id];
 
         return switch (node.node_type) {
-            .input => try std.fmt.allocPrint(self.allocator, "{s}", .{node.name}),
+            .input => try self.allocator.dupe(u8, node.name),
             .constant => blk: {
                 if (@floor(node.value) == node.value and @abs(node.value) < 1000000) {
                     break :blk try std.fmt.allocPrint(self.allocator, "{d:.0}", .{node.value});
@@ -359,41 +367,11 @@ const ComputationGraph = struct {
                     break :blk try std.fmt.allocPrint(self.allocator, "{d}", .{node.value});
                 }
             },
-            .add => blk: {
-                const left = try self.nodeToString(node.inputs[0]);
-                defer self.allocator.free(left);
-                const right = try self.nodeToString(node.inputs[1]);
-                defer self.allocator.free(right);
-                break :blk try std.fmt.allocPrint(self.allocator, "({s} + {s})", .{ left, right });
-            },
-            .sub => blk: {
-                const left = try self.nodeToString(node.inputs[0]);
-                defer self.allocator.free(left);
-                const right = try self.nodeToString(node.inputs[1]);
-                defer self.allocator.free(right);
-                break :blk try std.fmt.allocPrint(self.allocator, "({s} - {s})", .{ left, right });
-            },
-            .mul => blk: {
-                const left = try self.nodeToString(node.inputs[0]);
-                defer self.allocator.free(left);
-                const right = try self.nodeToString(node.inputs[1]);
-                defer self.allocator.free(right);
-                break :blk try std.fmt.allocPrint(self.allocator, "({s} * {s})", .{ left, right });
-            },
-            .div => blk: {
-                const left = try self.nodeToString(node.inputs[0]);
-                defer self.allocator.free(left);
-                const right = try self.nodeToString(node.inputs[1]);
-                defer self.allocator.free(right);
-                break :blk try std.fmt.allocPrint(self.allocator, "({s} / {s})", .{ left, right });
-            },
-            .pow => blk: {
-                const left = try self.nodeToString(node.inputs[0]);
-                defer self.allocator.free(left);
-                const right = try self.nodeToString(node.inputs[1]);
-                defer self.allocator.free(right);
-                break :blk try std.fmt.allocPrint(self.allocator, "({s} ^ {s})", .{ left, right });
-            },
+            .add => try self.binaryOpToString(node.inputs[0], node.inputs[1], "+"),
+            .sub => try self.binaryOpToString(node.inputs[0], node.inputs[1], "-"),
+            .mul => try self.binaryOpToString(node.inputs[0], node.inputs[1], "*"),
+            .div => try self.binaryOpToString(node.inputs[0], node.inputs[1], "/"),
+            .pow => try self.binaryOpToString(node.inputs[0], node.inputs[1], "^"),
             .log => blk: {
                 const arg = try self.nodeToString(node.inputs[0]);
                 defer self.allocator.free(arg);
@@ -499,9 +477,16 @@ const ComputationGraph = struct {
         errdefer self.allocator.free(op_name_copy);
         try self.allocated_strings.append(self.allocator, op_name_copy);
 
+        const inputs_array: [2]NodeId = if (op.arity == 1)
+            .{ operands[0], 0 }
+        else if (op.arity == 2)
+            .{ operands[0], operands[1] }
+        else
+            undefined;
+
         try self.nodes.append(self.allocator, .{
             .node_type = .custom,
-            .inputs = if (op.arity <= 2) .{ operands[0], if (operands.len > 1) operands[1] else 0 } else undefined,
+            .inputs = inputs_array,
             .custom_inputs = inputs_copy,
             .value = undefined,
             .name = "",
@@ -814,10 +799,7 @@ fn getOrCopyNode(
     const orig_node = orig_graph.nodes.items[orig_id];
 
     const new_id = switch (orig_node.node_type) {
-        .input => blk: {
-            const id = try grad_graph.addInput(orig_node.name);
-            break :blk id;
-        },
+        .input => try grad_graph.addInput(orig_node.name),
         .constant => try grad_graph.addConstant(orig_node.value),
         .add, .sub, .mul, .div, .pow => blk: {
             const left = try getOrCopyNode(orig_graph, grad_graph, orig_to_new, orig_node.inputs[0]);
@@ -922,7 +904,6 @@ const ParserError = error{
     UnknownFunction,
     UnknownCustomOp,
     OutOfMemory,
-    InvalidCharacter,
     ArityMismatch,
 };
 
