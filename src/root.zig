@@ -104,30 +104,6 @@ pub const OpRegistry = struct {
             }.tsg,
         });
 
-        // Sin gradient
-        try self.register(.{
-            .name = "sin_grad_0",
-            .arity = 1,
-            .forward = struct {
-                fn f(args: []const f32) f32 {
-                    return @cos(args[0]);
-                }
-            }.f,
-            .backward = struct {
-                fn b(grad_output: f32, args: []const f32, arg_index: usize) f32 {
-                    _ = args;
-                    _ = arg_index;
-                    _ = grad_output;
-                    return 0.0;
-                }
-            }.b,
-            .toString = struct {
-                fn ts(args: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
-                    return try std.fmt.allocPrint(allocator, "cos({s})", .{args[0]});
-                }
-            }.ts,
-        });
-
         // Cos
         try self.register(.{
             .name = "cos",
@@ -154,30 +130,6 @@ pub const OpRegistry = struct {
                     return try std.fmt.allocPrint(allocator, "(-1 * sin({s}))", .{args[0]});
                 }
             }.tsg,
-        });
-
-        // Cos gradient
-        try self.register(.{
-            .name = "cos_grad_0",
-            .arity = 1,
-            .forward = struct {
-                fn f(args: []const f32) f32 {
-                    return -@sin(args[0]);
-                }
-            }.f,
-            .backward = struct {
-                fn b(grad_output: f32, args: []const f32, arg_index: usize) f32 {
-                    _ = args;
-                    _ = arg_index;
-                    _ = grad_output;
-                    return 0.0;
-                }
-            }.b,
-            .toString = struct {
-                fn ts(args: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
-                    return try std.fmt.allocPrint(allocator, "(-1 * sin({s}))", .{args[0]});
-                }
-            }.ts,
         });
 
         // Exp
@@ -208,30 +160,6 @@ pub const OpRegistry = struct {
             }.tsg,
         });
 
-        // Exp gradient
-        try self.register(.{
-            .name = "exp_grad_0",
-            .arity = 1,
-            .forward = struct {
-                fn f(args: []const f32) f32 {
-                    return @exp(args[0]);
-                }
-            }.f,
-            .backward = struct {
-                fn b(grad_output: f32, args: []const f32, arg_index: usize) f32 {
-                    _ = args;
-                    _ = arg_index;
-                    _ = grad_output;
-                    return 0.0;
-                }
-            }.b,
-            .toString = struct {
-                fn ts(args: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
-                    return try std.fmt.allocPrint(allocator, "exp({s})", .{args[0]});
-                }
-            }.ts,
-        });
-
         // Log
         try self.register(.{
             .name = "log",
@@ -258,30 +186,6 @@ pub const OpRegistry = struct {
                     return try std.fmt.allocPrint(allocator, "(1 / {s})", .{args[0]});
                 }
             }.tsg,
-        });
-
-        // Log gradient
-        try self.register(.{
-            .name = "log_grad_0",
-            .arity = 1,
-            .forward = struct {
-                fn f(args: []const f32) f32 {
-                    return 1.0 / args[0];
-                }
-            }.f,
-            .backward = struct {
-                fn b(grad_output: f32, args: []const f32, arg_index: usize) f32 {
-                    _ = args;
-                    _ = arg_index;
-                    _ = grad_output;
-                    return 0.0;
-                }
-            }.b,
-            .toString = struct {
-                fn ts(args: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
-                    return try std.fmt.allocPrint(allocator, "(1 / {s})", .{args[0]});
-                }
-            }.ts,
         });
 
         // ReLU - now it's just another custom op!
@@ -312,9 +216,9 @@ pub const OpRegistry = struct {
             }.tsg,
         });
 
-        // ReLU gradient
+        // ReLU gradient helper
         try self.register(.{
-            .name = "relu_grad_0",
+            .name = "relu_grad",
             .arity = 1,
             .forward = struct {
                 fn f(args: []const f32) f32 {
@@ -331,7 +235,7 @@ pub const OpRegistry = struct {
             }.b,
             .toString = struct {
                 fn ts(args: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
-                    return try std.fmt.allocPrint(allocator, "relu_grad_0({s})", .{args[0]});
+                    return try std.fmt.allocPrint(allocator, "relu_grad({s})", .{args[0]});
                 }
             }.ts,
         });
@@ -363,31 +267,6 @@ pub const OpRegistry = struct {
                     return try std.fmt.allocPrint(allocator, "(sigmoid({s}) * (1 - sigmoid({s})))", .{ args[0], args[0] });
                 }
             }.tsg,
-        });
-
-        // Sigmoid gradient
-        try self.register(.{
-            .name = "sigmoid_grad_0",
-            .arity = 1,
-            .forward = struct {
-                fn f(args: []const f32) f32 {
-                    const s = 1.0 / (1.0 + @exp(-args[0]));
-                    return s * (1.0 - s);
-                }
-            }.f,
-            .backward = struct {
-                fn b(grad_output: f32, args: []const f32, arg_index: usize) f32 {
-                    _ = args;
-                    _ = arg_index;
-                    _ = grad_output;
-                    return 0.0;
-                }
-            }.b,
-            .toString = struct {
-                fn ts(args: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
-                    return try std.fmt.allocPrint(allocator, "(sigmoid({s}) * (1 - sigmoid({s})))", .{ args[0], args[0] });
-                }
-            }.ts,
         });
 
         // Max (binary)
@@ -548,15 +427,18 @@ const ComputationGraph = struct {
 
     pub fn addInput(self: *ComputationGraph, name: []const u8) !NodeId {
         const id = @as(NodeId, @intCast(self.nodes.items.len));
+        // Duplicate the name string to avoid use-after-free
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.allocated_strings.append(self.allocator, name_copy);
         try self.nodes.append(self.allocator, .{
             .node_type = .input,
             .inputs = undefined,
             .custom_inputs = null,
             .value = undefined,
-            .name = name,
+            .name = name_copy,
             .custom_op_name = null,
         });
-        try self.input_map.put(name, id);
+        try self.input_map.put(name_copy, id);
         return id;
     }
 
@@ -603,7 +485,16 @@ const ComputationGraph = struct {
         const id = @as(NodeId, @intCast(self.nodes.items.len));
         const op = self.registry.get(op_name) orelse return error.UnknownCustomOp;
 
+        // Validate operands.len matches op.arity
+        if (operands.len != op.arity) {
+            return error.ArityMismatch;
+        }
+
         const inputs_copy = if (op.arity <= 2) null else try self.allocator.dupe(NodeId, operands);
+
+        // Duplicate the op_name string to avoid use-after-free
+        const op_name_copy = try self.allocator.dupe(u8, op_name);
+        try self.allocated_strings.append(self.allocator, op_name_copy);
 
         try self.nodes.append(self.allocator, .{
             .node_type = .custom,
@@ -611,7 +502,7 @@ const ComputationGraph = struct {
             .custom_inputs = inputs_copy,
             .value = undefined,
             .name = "",
-            .custom_op_name = op_name,
+            .custom_op_name = op_name_copy,
         });
         return id;
     }
@@ -837,16 +728,34 @@ const ComputationGraph = struct {
                     }
 
                     // If the operation has symbolic gradient, use it
-                    if (op.toStringGrad) |_| {
+                    if (op.toStringGrad) |toStringGradFn| {
                         // For each input, compute its gradient symbolically
                         for (input_ids, 0..) |input_id, j| {
-                            // Create a node representing the local gradient
-                            const grad_op_name = try std.fmt.allocPrint(self.allocator, "{s}_grad_{d}", .{ op_name, j });
-                            try grad_graph.allocated_strings.append(self.allocator, grad_op_name);
-                            const local_grad_node = try grad_graph.addCustomOp(
-                                grad_op_name,
-                                input_nodes_in_grad,
-                            );
+                            // Get string representations of all inputs from the gradient graph
+                            var arg_strs = try self.allocator.alloc([]const u8, input_ids.len);
+                            defer {
+                                for (arg_strs) |s| self.allocator.free(s);
+                                self.allocator.free(arg_strs);
+                            }
+
+                            for (input_nodes_in_grad, 0..) |grad_node_id, k| {
+                                arg_strs[k] = try grad_graph.nodeToString(grad_node_id);
+                            }
+
+                            // Call toStringGrad to get the gradient expression
+                            const grad_expr = try toStringGradFn(arg_strs, j, self.allocator);
+                            defer self.allocator.free(grad_expr);
+
+                            // Parse the gradient expression to build the subgraph
+                            const tokens = try tokenize(self.allocator, grad_expr);
+                            defer self.allocator.free(tokens);
+
+                            var sub_parser = Parser{
+                                .tokens = tokens,
+                                .pos = 0,
+                                .graph = &grad_graph,
+                            };
+                            const local_grad_node = try sub_parser.parseExpression();
 
                             const grad_input = try grad_graph.addBinaryOp(.mul, grad_of_node, local_grad_node);
                             try accumulateGradient(&grad_graph, &grad_node_map, input_id, grad_input);
@@ -973,9 +882,9 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) ![]Token {
             continue;
         }
 
-        if (std.ascii.isAlphabetic(c)) {
+        if (std.ascii.isAlphabetic(c) or c == '_') {
             var end = i;
-            while (end < input.len and std.ascii.isAlphanumeric(input[end])) {
+            while (end < input.len and (std.ascii.isAlphanumeric(input[end]) or input[end] == '_')) {
                 end += 1;
             }
             const ident = input[i..end];
@@ -1011,6 +920,7 @@ const ParserError = error{
     UnknownCustomOp,
     OutOfMemory,
     InvalidCharacter,
+    ArityMismatch,
 };
 
 const Parser = struct {
