@@ -429,6 +429,7 @@ const ComputationGraph = struct {
         const id = @as(NodeId, @intCast(self.nodes.items.len));
         // Duplicate the name string to avoid use-after-free
         const name_copy = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(name_copy);
         try self.allocated_strings.append(self.allocator, name_copy);
         try self.nodes.append(self.allocator, .{
             .node_type = .input,
@@ -491,9 +492,11 @@ const ComputationGraph = struct {
         }
 
         const inputs_copy = if (op.arity <= 2) null else try self.allocator.dupe(NodeId, operands);
+        errdefer if (inputs_copy) |ic| self.allocator.free(ic);
 
         // Duplicate the op_name string to avoid use-after-free
         const op_name_copy = try self.allocator.dupe(u8, op_name);
+        errdefer self.allocator.free(op_name_copy);
         try self.allocated_strings.append(self.allocator, op_name_copy);
 
         try self.nodes.append(self.allocator, .{
