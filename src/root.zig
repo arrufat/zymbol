@@ -317,6 +317,7 @@ const ComputationGraph = struct {
 
     pub fn initFromString(allocator: std.mem.Allocator, registry: *OpRegistry, expr_str: []const u8) !ComputationGraph {
         var graph = ComputationGraph.init(allocator, registry);
+        errdefer graph.deinit();
 
         const tokens = try tokenize(allocator, expr_str);
         defer allocator.free(tokens);
@@ -1069,4 +1070,287 @@ pub fn parse(allocator: std.mem.Allocator, registry: *OpRegistry, expr_str: []co
 
 pub fn grad(graph: *ComputationGraph, wrt: []const u8) !ComputationGraph {
     return try graph.symbolicGrad(wrt);
+}
+
+// Tests
+test "basic arithmetic operations" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    // Test addition
+    {
+        var graph = try parse(allocator, &registry, "x + y");
+        defer graph.deinit();
+
+        var inputs = std.StringHashMap(f32).init(allocator);
+        defer inputs.deinit();
+        try inputs.put("x", 3.0);
+        try inputs.put("y", 4.0);
+
+        try std.testing.expectApproxEqAbs(@as(f32, 7.0), try graph.eval(inputs), 0.0001);
+    }
+
+    // Test multiplication
+    {
+        var graph = try parse(allocator, &registry, "x * y");
+        defer graph.deinit();
+
+        var inputs = std.StringHashMap(f32).init(allocator);
+        defer inputs.deinit();
+        try inputs.put("x", 3.0);
+        try inputs.put("y", 4.0);
+
+        try std.testing.expectApproxEqAbs(@as(f32, 12.0), try graph.eval(inputs), 0.0001);
+    }
+
+    // Test power
+    {
+        var graph = try parse(allocator, &registry, "x ^ 2");
+        defer graph.deinit();
+
+        var inputs = std.StringHashMap(f32).init(allocator);
+        defer inputs.deinit();
+        try inputs.put("x", 3.0);
+
+        try std.testing.expectApproxEqAbs(@as(f32, 9.0), try graph.eval(inputs), 0.0001);
+    }
+}
+
+test "custom operations - relu" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "relu(x)");
+    defer graph.deinit();
+
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+
+    // Test positive input
+    try inputs.put("x", 2.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), try graph.eval(inputs), 0.0001);
+
+    // Test negative input
+    try inputs.put("x", -1.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), try graph.eval(inputs), 0.0001);
+}
+
+test "custom operations - sigmoid" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "sigmoid(x)");
+    defer graph.deinit();
+
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+    try inputs.put("x", 0.0);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), try graph.eval(inputs), 0.0001);
+}
+
+test "numeric gradient - x^2" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "x ^ 2");
+    defer graph.deinit();
+
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+    try inputs.put("x", 3.0);
+
+    // d/dx(x^2) = 2x, at x=3: 2*3 = 6
+    const grad_val = try graph.gradient("x", inputs);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), grad_val, 0.0001);
+}
+
+test "numeric gradient - relu" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "relu(x)");
+    defer graph.deinit();
+
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+
+    // Gradient at positive point
+    try inputs.put("x", 2.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), try graph.gradient("x", inputs), 0.0001);
+
+    // Gradient at negative point
+    try inputs.put("x", -1.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), try graph.gradient("x", inputs), 0.0001);
+}
+
+test "symbolic gradient - x^2" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "x ^ 2");
+    defer graph.deinit();
+
+    var grad_graph = try grad(&graph, "x");
+    defer grad_graph.deinit();
+
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+    try inputs.put("x", 3.0);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), try grad_graph.eval(inputs), 0.0001);
+}
+
+test "symbolic gradient - relu" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "relu(x)");
+    defer graph.deinit();
+
+    var grad_graph = try grad(&graph, "x");
+    defer grad_graph.deinit();
+
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+
+    try inputs.put("x", 2.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), try grad_graph.eval(inputs), 0.0001);
+
+    try inputs.put("x", -1.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), try grad_graph.eval(inputs), 0.0001);
+}
+
+test "symbolic gradient - power with exponent variable" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "2 ^ x");
+    defer graph.deinit();
+
+    var grad_graph = try grad(&graph, "x");
+    defer grad_graph.deinit();
+
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+    try inputs.put("x", 3.0);
+
+    // d/dx(2^x) = 2^x * ln(2), at x=3: 8 * 0.693... = 5.545...
+    try std.testing.expectApproxEqAbs(@as(f32, 5.545), try grad_graph.eval(inputs), 0.01);
+}
+
+test "arity validation" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    // relu expects 1 argument, passing 0 should fail
+    const result = parse(allocator, &registry, "relu()");
+    try std.testing.expectError(error.ArityMismatch, result);
+}
+
+test "unknown custom op" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    // When parsing fails, no graph is created, so no cleanup needed
+    const result = parse(allocator, &registry, "unknown_op(x)");
+    try std.testing.expectError(error.UnknownFunction, result);
+}
+
+test "symbolic gradient unsupported for ops without toStringGrad" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "max(x, y)");
+    defer graph.deinit();
+
+    // max doesn't have toStringGrad, so symbolic gradient should fail
+    const result = grad(&graph, "x");
+    try std.testing.expectError(error.SymbolicGradientUnsupported, result);
+}
+
+test "use-after-free safety - parse from temporary string" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    // Create a temporary string that will be freed
+    const temp_expr = try allocator.dupe(u8, "relu(x)");
+
+    var graph = try parse(allocator, &registry, temp_expr);
+    allocator.free(temp_expr); // Free the source string
+
+    // Graph should still work because it duplicated the strings
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+    try inputs.put("x", 2.0);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), try graph.eval(inputs), 0.0001);
+
+    const graph_str = try graph.toString();
+    defer allocator.free(graph_str);
+    try std.testing.expectEqualStrings("relu(x)", graph_str);
+
+    graph.deinit();
+}
+
+test "toString formatting" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    // Test integer constant formatting
+    {
+        var graph = try parse(allocator, &registry, "x + 5");
+        defer graph.deinit();
+        const str = try graph.toString();
+        defer allocator.free(str);
+        try std.testing.expectEqualStrings("(x + 5)", str);
+    }
+
+    // Test operation formatting
+    {
+        var graph = try parse(allocator, &registry, "x * y + z");
+        defer graph.deinit();
+        const str = try graph.toString();
+        defer allocator.free(str);
+        try std.testing.expectEqualStrings("((x * y) + z)", str);
+    }
 }
