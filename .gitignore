@@ -1,2 +1,13 @@
+# Zig build/artifact directories
 /.zig-cache
-/zig-out
+/zig-cache/
+/zig-out/
+
+# Generated WASM install directory
+/zig-out/wasm/
+
+# Editor cruft
+.DS_Store
+.idea/
+.vscode/
+.fleet/
