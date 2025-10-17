@@ -742,6 +742,10 @@ const Simplifier = struct {
         if (rhs_const) |rhs_val| {
             if (approxEqual(rhs_val, 0.0)) return lhs;
         }
+        if (lhs == rhs) {
+            const two = try self.target.addConstant(2.0);
+            return self.simplifyMul(two, lhs);
+        }
         if (lhs_const) |lhs_val| {
             if (rhs_const) |rhs_val| {
                 const result = lhs_val + rhs_val;
@@ -757,6 +761,9 @@ const Simplifier = struct {
 
         if (rhs_const) |rhs_val| {
             if (approxEqual(rhs_val, 0.0)) return lhs;
+        }
+        if (lhs == rhs) {
+            return self.target.addConstant(0.0);
         }
         if (lhs_const) |lhs_val| {
             if (rhs_const) |rhs_val| {
@@ -781,11 +788,18 @@ const Simplifier = struct {
         if (rhs_const) |rhs_val| {
             if (approxEqual(rhs_val, 0.0)) return rhs;
             if (approxEqual(rhs_val, 1.0)) return lhs;
+            if (approxEqual(rhs_val, -1.0)) return self.simplifyNegate(lhs);
+        }
+        if (lhs == rhs) {
+            const two = try self.target.addConstant(2.0);
+            return self.simplifyPow(lhs, two);
         }
         if (lhs_const) |lhs_val| {
             if (rhs_const) |rhs_val| {
                 const result = lhs_val * rhs_val;
                 if (std.math.isFinite(result)) return self.target.addConstant(result);
+            } else if (approxEqual(lhs_val, -1.0)) {
+                return self.simplifyNegate(rhs);
             }
         }
         return self.target.addBinary(.mul, lhs, rhs);
@@ -801,6 +815,14 @@ const Simplifier = struct {
         if (rhs_const) |rhs_val| {
             if (approxEqual(rhs_val, 1.0)) return lhs;
             if (approxEqual(rhs_val, 0.0)) return self.target.addBinary(.div, lhs, rhs);
+            if (approxEqual(rhs_val, -1.0)) return self.simplifyNegate(lhs);
+        }
+        if (lhs == rhs) {
+            if (lhs_const) |lhs_val| {
+                if (!approxEqual(lhs_val, 0.0)) return self.target.addConstant(1.0);
+            } else {
+                return self.target.addConstant(1.0);
+            }
         }
         if (lhs_const) |lhs_val| {
             if (rhs_const) |rhs_val| {
@@ -1279,4 +1301,40 @@ test "pow simplification" {
     defer allocator.free(grad_str);
 
     try std.testing.expect(std.mem.eql(u8, grad_str, "(3 * (x ^ 2))"));
+}
+
+test "product rule combines like terms" {
+    const allocator = std.testing.allocator;
+    var registry: Registry = Registry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var expr: Expression = try Expression.parse(allocator, &registry, "x * x");
+    defer expr.deinit();
+
+    var grad_expr: Expression = try expr.symbolicGradient("x");
+    defer grad_expr.deinit();
+
+    const grad_str = try grad_expr.toString();
+    defer allocator.free(grad_str);
+
+    try std.testing.expect(std.mem.eql(u8, grad_str, "(2 * x)"));
+}
+
+test "division simplifies identical terms" {
+    const allocator = std.testing.allocator;
+    var registry: Registry = Registry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var expr: Expression = try Expression.parse(allocator, &registry, "x / x");
+    defer expr.deinit();
+
+    var simplified: Expression = try expr.simplify();
+    defer simplified.deinit();
+
+    const simplified_str = try simplified.toString();
+    defer allocator.free(simplified_str);
+
+    try std.testing.expect(std.mem.eql(u8, simplified_str, "1"));
 }

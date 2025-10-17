@@ -32,7 +32,7 @@ std.debug.print("df/dx(1.5) = {d}\n", .{grad_value});
 - **Composable** - `grad(grad(f))` for higher-order derivatives
 - **Extensible** - register custom operations without modifying the library
 - **Inspectable** - convert graphs back to human-readable strings
-- **Simplified output** - algebraic pass folds constants and removes trivial factors (e.g. `d/dx x^3` -> `3 * (x ^ 2)`)
+- **Simplified output** - algebraic pass folds constants, collapses duplicate terms, and removes trivial factors (e.g. `d/dx x^3` -> `3 * (x ^ 2)`, `x + x` -> `2 * x`)
 - **Zero runtime overhead** - all parsing happens at compile time (when used with comptime)
 - **Robust gradients** - gracefully handles edge cases like non-positive power bases to avoid NaNs
 
