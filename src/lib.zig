@@ -44,7 +44,7 @@ pub const Registry = struct {
     }
 
     pub fn deinit(self: *Registry) void {
-        var it = self.ops.iterator();
+        var it: std.StringHashMapUnmanaged(Operation).Iterator = self.ops.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
         }
@@ -206,7 +206,7 @@ const Graph = struct {
             },
             .custom => blk: {
                 const custom = orig_node.payload.custom;
-                var buffer = try self.allocator.alloc(NodeId, custom.inputs.len);
+                var buffer: []NodeId = try self.allocator.alloc(NodeId, custom.inputs.len);
                 defer self.allocator.free(buffer);
                 for (custom.inputs, 0..) |child, idx| {
                     buffer[idx] = try self.copyNode(source, child, map);
@@ -226,7 +226,7 @@ pub const Expression = struct {
     output: NodeId,
 
     pub fn parse(allocator: std.mem.Allocator, registry: *Registry, source: []const u8) Error!Expression {
-        var parser: Parser = .init(allocator, registry, source);
+        var parser: Parser = Parser.init(allocator, registry, source);
         defer parser.deinit();
         const parsed = try parser.parse();
         return .{
@@ -251,7 +251,7 @@ pub const Expression = struct {
     }
 
     pub fn evaluate(self: *const Expression, inputs: std.StringHashMap(f32)) Error!f32 {
-        var values = try self.allocator.alloc(f32, self.graph.nodes.items.len);
+        var values: []f32 = try self.allocator.alloc(f32, self.graph.nodes.items.len);
         defer self.allocator.free(values);
 
         for (self.graph.nodes.items, 0..) |node, idx| {
@@ -261,16 +261,18 @@ pub const Expression = struct {
     }
 
     pub fn symbolicGradient(self: *const Expression, variable: []const u8) Error!Expression {
-        return SymbolicBuilder.build(self, variable);
+        var raw: Expression = try SymbolicBuilder.build(self, variable);
+        defer raw.deinit();
+        return raw.simplify();
     }
 
     pub fn numericGradient(self: *const Expression, variable: []const u8, inputs: std.StringHashMap(f32)) Error!f32 {
-        var values = try self.allocator.alloc(f32, self.graph.nodes.items.len);
+        var values: []f32 = try self.allocator.alloc(f32, self.graph.nodes.items.len);
         defer self.allocator.free(values);
         for (self.graph.nodes.items, 0..) |node, idx| {
             values[idx] = try evaluateNode(self, node, values, inputs);
         }
-        var adjoints = try self.graphBackward(values);
+        var adjoints: []f32 = try self.graphBackward(values);
         defer self.allocator.free(adjoints);
 
         const id = self.graph.input_lookup.get(variable) orelse return Error.UnknownVariable;
@@ -278,11 +280,11 @@ pub const Expression = struct {
     }
 
     fn graphBackward(self: *const Expression, values: []const f32) Error![]f32 {
-        var adjoints = try self.allocator.alloc(f32, self.graph.nodes.items.len);
+        var adjoints: []f32 = try self.allocator.alloc(f32, self.graph.nodes.items.len);
         @memset(adjoints, 0.0);
         adjoints[@intCast(self.output)] = 1.0;
 
-        var idx = self.graph.nodes.items.len;
+        var idx: usize = self.graph.nodes.items.len;
         while (idx > 0) {
             idx -= 1;
             const node = self.graph.nodes.items[idx];
@@ -339,7 +341,7 @@ pub const Expression = struct {
                 },
                 .custom => {
                     const custom = node.payload.custom;
-                    var args = try self.allocator.alloc(f32, custom.inputs.len);
+                    var args: []f32 = try self.allocator.alloc(f32, custom.inputs.len);
                     defer self.allocator.free(args);
                     for (custom.inputs, 0..) |child, arg_idx| {
                         args[arg_idx] = values[@intCast(child)];
@@ -354,13 +356,17 @@ pub const Expression = struct {
     }
 
     pub fn toString(self: *const Expression) Error![]u8 {
-        var interner = std.AutoHashMap(NodeId, []const u8).init(self.allocator);
+        var interner: std.AutoHashMap(NodeId, []const u8) = std.AutoHashMap(NodeId, []const u8).init(self.allocator);
         defer {
-            var it = interner.iterator();
+            var it: std.AutoHashMap(NodeId, []const u8).Iterator = interner.iterator();
             while (it.next()) |entry| self.allocator.free(entry.value_ptr.*);
             interner.deinit();
         }
         return renderNode(self, self.output, &interner);
+    }
+
+    pub fn simplify(self: *const Expression) Error!Expression {
+        return Simplifier.run(self);
     }
 };
 
@@ -394,7 +400,7 @@ fn evaluateNode(expr: *const Expression, node: Node, values: []f32, inputs: std.
         .cos => @cos(values[@intCast(node.payload.unary)]),
         .custom => blk: {
             const custom = node.payload.custom;
-            var args = try expr.allocator.alloc(f32, custom.inputs.len);
+            var args: []f32 = try expr.allocator.alloc(f32, custom.inputs.len);
             defer expr.allocator.free(args);
             for (custom.inputs, 0..) |child, arg_idx| {
                 args[arg_idx] = values[@intCast(child)];
@@ -421,7 +427,7 @@ fn renderNode(expr: *const Expression, id: NodeId, cache: *std.AutoHashMap(NodeI
         .cos => try renderCall(expr, cache, "cos", node.payload.unary),
         .custom => blk: {
             const custom = node.payload.custom;
-            var args = try expr.allocator.alloc([]const u8, custom.inputs.len);
+            var args: [][]const u8 = try expr.allocator.alloc([]const u8, custom.inputs.len);
             defer {
                 for (args) |s| expr.allocator.free(s);
                 expr.allocator.free(args);
@@ -515,13 +521,13 @@ const SymbolicContext = struct {
 const SymbolicBuilder = struct {
     pub fn build(expr: *const Expression, variable: []const u8) Error!Expression {
         const allocator = expr.allocator;
-        var grad_graph = Graph.init(allocator);
+        var grad_graph: Graph = Graph.init(allocator);
         errdefer grad_graph.deinit();
 
-        var gradients = std.AutoHashMap(NodeId, NodeId).init(allocator);
+        var gradients: std.AutoHashMap(NodeId, NodeId) = std.AutoHashMap(NodeId, NodeId).init(allocator);
         defer gradients.deinit();
 
-        var ctx = SymbolicContext.init(allocator, expr.registry, &expr.graph, &grad_graph, &gradients);
+        var ctx: SymbolicContext = SymbolicContext.init(allocator, expr.registry, &expr.graph, &grad_graph, &gradients);
         defer ctx.deinit();
 
         const input_id = expr.graph.input_lookup.get(variable) orelse return Error.UnknownVariable;
@@ -529,7 +535,7 @@ const SymbolicBuilder = struct {
         const one = try grad_graph.addConstant(1.0);
         try gradients.put(expr.output, one);
 
-        var idx = expr.graph.nodes.items.len;
+        var idx: usize = expr.graph.nodes.items.len;
         while (idx > 0) {
             idx -= 1;
             const node_id = @as(NodeId, @intCast(idx));
@@ -634,6 +640,239 @@ const SymbolicBuilder = struct {
     }
 };
 
+const Simplifier = struct {
+    allocator: std.mem.Allocator,
+    registry: *Registry,
+    source: *const Graph,
+    target: *Graph,
+    cache: std.AutoHashMap(NodeId, NodeId),
+
+    const epsilon: f32 = 1e-6;
+
+    fn run(expr: *const Expression) Error!Expression {
+        var target: Graph = Graph.init(expr.allocator);
+        var needs_deinit: bool = true;
+        defer {
+            if (needs_deinit) target.deinit();
+        }
+
+        var simplifier: Simplifier = Simplifier.init(expr.allocator, expr.registry, &expr.graph, &target);
+        defer simplifier.deinit();
+
+        const output = try simplifier.simplifyNode(expr.output);
+        needs_deinit = false;
+        return Expression.fromGraph(expr.allocator, expr.registry, target, output);
+    }
+
+    fn init(allocator: std.mem.Allocator, registry: *Registry, source: *const Graph, target: *Graph) Simplifier {
+        return .{
+            .allocator = allocator,
+            .registry = registry,
+            .source = source,
+            .target = target,
+            .cache = std.AutoHashMap(NodeId, NodeId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *Simplifier) void {
+        self.cache.deinit();
+    }
+
+    fn simplifyNode(self: *Simplifier, id: NodeId) Error!NodeId {
+        if (self.cache.get(id)) |existing| return existing;
+        const node = self.source.node(id);
+        const simplified: NodeId = switch (node.kind) {
+            .input => try self.target.addInput(node.payload.input),
+            .constant => try self.target.addConstant(node.payload.constant),
+            .add => blk: {
+                const binary = node.payload.binary;
+                const lhs = try self.simplifyNode(binary.lhs);
+                const rhs = try self.simplifyNode(binary.rhs);
+                break :blk try self.simplifyAdd(lhs, rhs);
+            },
+            .sub => blk: {
+                const binary = node.payload.binary;
+                const lhs = try self.simplifyNode(binary.lhs);
+                const rhs = try self.simplifyNode(binary.rhs);
+                break :blk try self.simplifySub(lhs, rhs);
+            },
+            .mul => blk: {
+                const binary = node.payload.binary;
+                const lhs = try self.simplifyNode(binary.lhs);
+                const rhs = try self.simplifyNode(binary.rhs);
+                break :blk try self.simplifyMul(lhs, rhs);
+            },
+            .div => blk: {
+                const binary = node.payload.binary;
+                const lhs = try self.simplifyNode(binary.lhs);
+                const rhs = try self.simplifyNode(binary.rhs);
+                break :blk try self.simplifyDiv(lhs, rhs);
+            },
+            .pow => blk: {
+                const binary = node.payload.binary;
+                const lhs = try self.simplifyNode(binary.lhs);
+                const rhs = try self.simplifyNode(binary.rhs);
+                break :blk try self.simplifyPow(lhs, rhs);
+            },
+            .log => try self.simplifyUnary(.log, try self.simplifyNode(node.payload.unary)),
+            .exp => try self.simplifyUnary(.exp, try self.simplifyNode(node.payload.unary)),
+            .sin => try self.simplifyUnary(.sin, try self.simplifyNode(node.payload.unary)),
+            .cos => try self.simplifyUnary(.cos, try self.simplifyNode(node.payload.unary)),
+            .custom => blk: {
+                const custom = node.payload.custom;
+                var simplified_inputs: []NodeId = try self.allocator.alloc(NodeId, custom.inputs.len);
+                defer self.allocator.free(simplified_inputs);
+                for (custom.inputs, 0..) |child, idx| {
+                    simplified_inputs[idx] = try self.simplifyNode(child);
+                }
+                break :blk try self.target.addCustom(custom.op, simplified_inputs);
+            },
+        };
+        try self.cache.put(id, simplified);
+        return simplified;
+    }
+
+    fn simplifyAdd(self: *Simplifier, lhs: NodeId, rhs: NodeId) Error!NodeId {
+        const lhs_const = self.constantValue(lhs);
+        const rhs_const = self.constantValue(rhs);
+
+        if (lhs_const) |lhs_val| {
+            if (approxEqual(lhs_val, 0.0)) return rhs;
+        }
+        if (rhs_const) |rhs_val| {
+            if (approxEqual(rhs_val, 0.0)) return lhs;
+        }
+        if (lhs_const) |lhs_val| {
+            if (rhs_const) |rhs_val| {
+                const result = lhs_val + rhs_val;
+                if (std.math.isFinite(result)) return self.target.addConstant(result);
+            }
+        }
+        return self.target.addBinary(.add, lhs, rhs);
+    }
+
+    fn simplifySub(self: *Simplifier, lhs: NodeId, rhs: NodeId) Error!NodeId {
+        const lhs_const = self.constantValue(lhs);
+        const rhs_const = self.constantValue(rhs);
+
+        if (rhs_const) |rhs_val| {
+            if (approxEqual(rhs_val, 0.0)) return lhs;
+        }
+        if (lhs_const) |lhs_val| {
+            if (rhs_const) |rhs_val| {
+                const result = lhs_val - rhs_val;
+                if (std.math.isFinite(result)) return self.target.addConstant(result);
+            }
+            if (approxEqual(lhs_val, 0.0)) {
+                return self.simplifyNegate(rhs);
+            }
+        }
+        return self.target.addBinary(.sub, lhs, rhs);
+    }
+
+    fn simplifyMul(self: *Simplifier, lhs: NodeId, rhs: NodeId) Error!NodeId {
+        const lhs_const = self.constantValue(lhs);
+        const rhs_const = self.constantValue(rhs);
+
+        if (lhs_const) |lhs_val| {
+            if (approxEqual(lhs_val, 0.0)) return lhs;
+            if (approxEqual(lhs_val, 1.0)) return rhs;
+        }
+        if (rhs_const) |rhs_val| {
+            if (approxEqual(rhs_val, 0.0)) return rhs;
+            if (approxEqual(rhs_val, 1.0)) return lhs;
+        }
+        if (lhs_const) |lhs_val| {
+            if (rhs_const) |rhs_val| {
+                const result = lhs_val * rhs_val;
+                if (std.math.isFinite(result)) return self.target.addConstant(result);
+            }
+        }
+        return self.target.addBinary(.mul, lhs, rhs);
+    }
+
+    fn simplifyDiv(self: *Simplifier, lhs: NodeId, rhs: NodeId) Error!NodeId {
+        const lhs_const = self.constantValue(lhs);
+        const rhs_const = self.constantValue(rhs);
+
+        if (lhs_const) |lhs_val| {
+            if (approxEqual(lhs_val, 0.0)) return lhs;
+        }
+        if (rhs_const) |rhs_val| {
+            if (approxEqual(rhs_val, 1.0)) return lhs;
+            if (approxEqual(rhs_val, 0.0)) return self.target.addBinary(.div, lhs, rhs);
+        }
+        if (lhs_const) |lhs_val| {
+            if (rhs_const) |rhs_val| {
+                if (!approxEqual(rhs_val, 0.0)) {
+                    const result = lhs_val / rhs_val;
+                    if (std.math.isFinite(result)) return self.target.addConstant(result);
+                }
+            }
+        }
+        return self.target.addBinary(.div, lhs, rhs);
+    }
+
+    fn simplifyPow(self: *Simplifier, base: NodeId, exponent: NodeId) Error!NodeId {
+        const base_const = self.constantValue(base);
+        const exponent_const = self.constantValue(exponent);
+
+        if (exponent_const) |exp_val| {
+            if (approxEqual(exp_val, 1.0)) return base;
+            if (approxEqual(exp_val, 0.0)) return self.target.addConstant(1.0);
+        }
+        if (base_const) |base_val| {
+            if (approxEqual(base_val, 0.0)) {
+                if (exponent_const) |exp_val| {
+                    if (exp_val > 0.0) return base;
+                }
+            }
+            if (approxEqual(base_val, 1.0)) return self.target.addConstant(1.0);
+        }
+        if (base_const) |base_val| {
+            if (exponent_const) |exp_val| {
+                const result = std.math.pow(f32, base_val, exp_val);
+                if (std.math.isFinite(result)) return self.target.addConstant(result);
+            }
+        }
+        return self.target.addBinary(.pow, base, exponent);
+    }
+
+    fn simplifyUnary(self: *Simplifier, kind: NodeKind, operand: NodeId) Error!NodeId {
+        if (self.constantValue(operand)) |value| {
+            const folded = switch (kind) {
+                .log => @log(value),
+                .exp => @exp(value),
+                .sin => @sin(value),
+                .cos => @cos(value),
+                else => value,
+            };
+            if (std.math.isFinite(folded)) return self.target.addConstant(folded);
+        }
+        return self.target.addUnary(kind, operand);
+    }
+
+    fn simplifyNegate(self: *Simplifier, node_id: NodeId) Error!NodeId {
+        if (self.constantValue(node_id)) |value| {
+            return self.target.addConstant(-value);
+        }
+        const neg_one = try self.target.addConstant(-1.0);
+        return self.target.addBinary(.mul, neg_one, node_id);
+    }
+
+    fn constantValue(self: *Simplifier, id: NodeId) ?f32 {
+        const node = self.target.node(id);
+        return switch (node.kind) {
+            .constant => node.payload.constant,
+            else => null,
+        };
+    }
+};
+
+fn approxEqual(lhs: f32, rhs: f32) bool {
+    return std.math.approxEqAbs(f32, lhs, rhs, Simplifier.epsilon);
+}
+
 const Parser = struct {
     allocator: std.mem.Allocator,
     registry: *Registry,
@@ -674,7 +913,7 @@ const Parser = struct {
     }
 
     fn parseAddSub(self: *Parser) Error!NodeId {
-        var node = try self.parseMulDiv();
+        var node: NodeId = try self.parseMulDiv();
         while (true) {
             self.skipWhitespace();
             if (self.peekChar()) |c| {
@@ -696,7 +935,7 @@ const Parser = struct {
     }
 
     fn parseMulDiv(self: *Parser) Error!NodeId {
-        var node = try self.parsePower();
+        var node: NodeId = try self.parsePower();
         while (true) {
             self.skipWhitespace();
             if (self.peekChar()) |c| {
@@ -718,7 +957,7 @@ const Parser = struct {
     }
 
     fn parsePower(self: *Parser) Error!NodeId {
-        var node = try self.parseUnary();
+        var node: NodeId = try self.parseUnary();
         self.skipWhitespace();
         if (self.peekChar()) |c| {
             if (c == '^') {
@@ -972,14 +1211,14 @@ const log_guard_op = Operation{
 
 test "basic arithmetic" {
     const allocator = std.testing.allocator;
-    var registry = Registry.init(allocator);
+    var registry: Registry = Registry.init(allocator);
     defer registry.deinit();
     try registry.registerBuiltins();
 
-    var expr = try Expression.parse(allocator, &registry, "x + y * 2");
+    var expr: Expression = try Expression.parse(allocator, &registry, "x + y * 2");
     defer expr.deinit();
 
-    var inputs = std.StringHashMap(f32).init(allocator);
+    var inputs: std.StringHashMap(f32) = std.StringHashMap(f32).init(allocator);
     defer inputs.deinit();
     try inputs.put("x", 1.0);
     try inputs.put("y", 3.0);
@@ -988,17 +1227,17 @@ test "basic arithmetic" {
 
 test "symbolic gradient" {
     const allocator = std.testing.allocator;
-    var registry = Registry.init(allocator);
+    var registry: Registry = Registry.init(allocator);
     defer registry.deinit();
     try registry.registerBuiltins();
 
-    var expr = try Expression.parse(allocator, &registry, "x ^ 2");
+    var expr: Expression = try Expression.parse(allocator, &registry, "x ^ 2");
     defer expr.deinit();
 
-    var grad_expr = try expr.symbolicGradient("x");
+    var grad_expr: Expression = try expr.symbolicGradient("x");
     defer grad_expr.deinit();
 
-    var inputs = std.StringHashMap(f32).init(allocator);
+    var inputs: std.StringHashMap(f32) = std.StringHashMap(f32).init(allocator);
     defer inputs.deinit();
     try inputs.put("x", 3.0);
     try std.testing.expectApproxEqAbs(@as(f32, 6.0), try grad_expr.evaluate(inputs), 0.0001);
@@ -1006,20 +1245,38 @@ test "symbolic gradient" {
 
 test "numeric gradient matches" {
     const allocator = std.testing.allocator;
-    var registry = Registry.init(allocator);
+    var registry: Registry = Registry.init(allocator);
     defer registry.deinit();
     try registry.registerBuiltins();
 
-    var expr = try Expression.parse(allocator, &registry, "relu(x) * sigmoid(x)");
+    var expr: Expression = try Expression.parse(allocator, &registry, "relu(x) * sigmoid(x)");
     defer expr.deinit();
 
-    var inputs = std.StringHashMap(f32).init(allocator);
+    var inputs: std.StringHashMap(f32) = std.StringHashMap(f32).init(allocator);
     defer inputs.deinit();
     try inputs.put("x", 2.0);
 
     const numeric = try expr.numericGradient("x", inputs);
-    var grad_expr = try expr.symbolicGradient("x");
+    var grad_expr: Expression = try expr.symbolicGradient("x");
     defer grad_expr.deinit();
     const symbolic = try grad_expr.evaluate(inputs);
     try std.testing.expectApproxEqAbs(symbolic, numeric, 0.0001);
+}
+
+test "pow simplification" {
+    const allocator = std.testing.allocator;
+    var registry: Registry = Registry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var expr: Expression = try Expression.parse(allocator, &registry, "x ^ 3");
+    defer expr.deinit();
+
+    var grad_expr: Expression = try expr.symbolicGradient("x");
+    defer grad_expr.deinit();
+
+    const grad_str = try grad_expr.toString();
+    defer allocator.free(grad_str);
+
+    try std.testing.expect(std.mem.eql(u8, grad_str, "(3 * (x ^ 2))"));
 }
