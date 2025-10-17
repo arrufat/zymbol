@@ -750,13 +750,36 @@ const Simplifier = struct {
             const two = try self.target.addConstant(2.0);
             return self.simplifyMul(two, lhs);
         }
-        if (lhs_const) |lhs_val| {
-            if (rhs_const) |rhs_val| {
-                const result = lhs_val + rhs_val;
-                if (std.math.isFinite(result)) return self.target.addConstant(result);
+        var terms: std.ArrayList(NodeId) = .empty;
+        defer terms.deinit(self.allocator);
+
+        var const_sum: f32 = 0.0;
+        var has_const = false;
+
+        try self.collectAddTerms(lhs, &terms, &const_sum, &has_const);
+        try self.collectAddTerms(rhs, &terms, &const_sum, &has_const);
+
+        var result: ?NodeId = null;
+        for (terms.items) |term| {
+            result = if (result) |acc|
+                try self.target.addBinary(.add, acc, term)
+            else
+                term;
+        }
+
+        if (has_const) {
+            if (!approxZero(const_sum)) {
+                const const_node = try self.target.addConstant(const_sum);
+                result = if (result) |acc|
+                    try self.target.addBinary(.add, acc, const_node)
+                else
+                    const_node;
+            } else if (result == null) {
+                return self.target.addConstant(0.0);
             }
         }
-        return self.target.addBinary(.add, lhs, rhs);
+
+        return result orelse try self.target.addConstant(0.0);
     }
 
     fn simplifySub(self: *Simplifier, lhs: NodeId, rhs: NodeId) Error!NodeId {
@@ -798,15 +821,52 @@ const Simplifier = struct {
             const two = try self.target.addConstant(2.0);
             return self.simplifyPow(lhs, two);
         }
-        if (lhs_const) |lhs_val| {
-            if (rhs_const) |rhs_val| {
-                const result = lhs_val * rhs_val;
-                if (std.math.isFinite(result)) return self.target.addConstant(result);
-            } else if (approxEqual(lhs_val, -1.0)) {
-                return self.simplifyNegate(rhs);
+        var factors: std.ArrayList(NodeId) = .empty;
+        defer factors.deinit(self.allocator);
+
+        var const_product: f32 = 1.0;
+        var has_const = false;
+        var zero_detected = false;
+
+        try self.collectMulTerms(lhs, &factors, &const_product, &has_const, &zero_detected);
+        try self.collectMulTerms(rhs, &factors, &const_product, &has_const, &zero_detected);
+
+        if (zero_detected or approxZero(const_product)) {
+            return self.target.addConstant(0.0);
+        }
+
+        var negative = false;
+        var result: ?NodeId = null;
+
+        if (has_const) {
+            if (approxOne(const_product)) {
+                // no-op
+            } else if (approxEqual(const_product, -1.0)) {
+                negative = true;
+            } else {
+                const const_node = try self.target.addConstant(const_product);
+                result = const_node;
             }
         }
-        return self.target.addBinary(.mul, lhs, rhs);
+
+        for (factors.items) |factor| {
+            result = if (result) |acc|
+                try self.target.addBinary(.mul, acc, factor)
+            else
+                factor;
+        }
+
+        const final = result orelse {
+            if (negative) {
+                return self.target.addConstant(-1.0);
+            }
+            return self.target.addConstant(1.0);
+        };
+
+        if (negative) {
+            return self.simplifyNegate(final);
+        }
+        return final;
     }
 
     fn simplifyDiv(self: *Simplifier, lhs: NodeId, rhs: NodeId) Error!NodeId {
@@ -893,10 +953,71 @@ const Simplifier = struct {
             else => null,
         };
     }
+
+    fn collectAddTerms(
+        self: *Simplifier,
+        id: NodeId,
+        terms: *std.ArrayList(NodeId),
+        const_sum: *f32,
+        has_const: *bool,
+    ) Error!void {
+        const node = self.target.node(id);
+        switch (node.kind) {
+            .add => {
+                const binary = node.payload.binary;
+                try self.collectAddTerms(binary.lhs, terms, const_sum, has_const);
+                try self.collectAddTerms(binary.rhs, terms, const_sum, has_const);
+            },
+            .constant => {
+                const current = if (has_const.*) const_sum.* else 0.0;
+                const_sum.* = current + node.payload.constant;
+                has_const.* = true;
+            },
+            else => try terms.append(self.allocator, id),
+        }
+    }
+
+    fn collectMulTerms(
+        self: *Simplifier,
+        id: NodeId,
+        factors: *std.ArrayList(NodeId),
+        const_product: *f32,
+        has_const: *bool,
+        zero_detected: *bool,
+    ) Error!void {
+        if (zero_detected.*) return;
+        const node = self.target.node(id);
+        switch (node.kind) {
+            .mul => {
+                const binary = node.payload.binary;
+                try self.collectMulTerms(binary.lhs, factors, const_product, has_const, zero_detected);
+                try self.collectMulTerms(binary.rhs, factors, const_product, has_const, zero_detected);
+            },
+            .constant => {
+                const value = node.payload.constant;
+                if (approxZero(value)) {
+                    zero_detected.* = true;
+                    return;
+                }
+                const current = if (has_const.*) const_product.* else 1.0;
+                const_product.* = current * value;
+                has_const.* = true;
+            },
+            else => try factors.append(self.allocator, id),
+        }
+    }
 };
 
 fn approxEqual(lhs: f32, rhs: f32) bool {
     return std.math.approxEqAbs(f32, lhs, rhs, Simplifier.epsilon);
+}
+
+fn approxZero(value: f32) bool {
+    return approxEqual(value, 0.0);
+}
+
+fn approxOne(value: f32) bool {
+    return approxEqual(value, 1.0);
 }
 
 const Parser = struct {
