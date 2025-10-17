@@ -52,3 +52,5 @@ python -m http.server 8080
 ```
 
 Then browse to <http://localhost:8080>. The page lets you type an expression, choose the differentiation variable, and calls the compiled WASM module to print the symbolic derivative. The build enables `rdynamic` so every exported Zig function stays visible to JavaScript.
+
+Changes pushed to `master` are deployed automatically to <https://arrufat.github.io/zymbol> via the GitHub Actions workflow in `.github/workflows/pages.yml`, which builds with the latest Zig master toolchain.
