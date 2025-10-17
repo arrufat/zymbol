@@ -260,8 +260,12 @@ pub const Expression = struct {
         return values[@intCast(self.output)];
     }
 
+    pub fn symbolicGradientRaw(self: *const Expression, variable: []const u8) Error!Expression {
+        return SymbolicBuilder.build(self, variable);
+    }
+
     pub fn symbolicGradient(self: *const Expression, variable: []const u8) Error!Expression {
-        var raw: Expression = try SymbolicBuilder.build(self, variable);
+        var raw: Expression = try self.symbolicGradientRaw(variable);
         defer raw.deinit();
         return raw.simplify();
     }
@@ -1301,6 +1305,24 @@ test "pow simplification" {
     defer allocator.free(grad_str);
 
     try std.testing.expect(std.mem.eql(u8, grad_str, "(3 * (x ^ 2))"));
+}
+
+test "raw gradient keeps duplicated terms" {
+    const allocator = std.testing.allocator;
+    var registry: Registry = Registry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var expr: Expression = try Expression.parse(allocator, &registry, "x * x");
+    defer expr.deinit();
+
+    var grad_expr: Expression = try expr.symbolicGradientRaw("x");
+    defer grad_expr.deinit();
+
+    const grad_str = try grad_expr.toString();
+    defer allocator.free(grad_str);
+
+    try std.testing.expect(std.mem.eql(u8, grad_str, "((1 * x) + (1 * x))"));
 }
 
 test "product rule combines like terms" {

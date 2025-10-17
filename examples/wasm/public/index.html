@@ -53,6 +53,17 @@
       pre[data-status="error"] {
         color: #b00020;
       }
+      label.checkbox {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 500;
+        margin-top: 1rem;
+      }
+      label.checkbox input {
+        width: auto;
+        margin: 0;
+      }
     </style>
   </head>
   <body>
@@ -65,6 +76,11 @@
 
     <label for="variable">Differentiate with respect to</label>
     <input id="variable" type="text" value="x" maxlength="16" />
+
+    <label class="checkbox">
+      <input id="simplify" type="checkbox" checked />
+      Simplify derivative
+    </label>
 
     <div>
       <button id="derive">Derive</button>

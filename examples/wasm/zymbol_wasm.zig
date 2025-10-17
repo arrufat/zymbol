@@ -31,7 +31,7 @@ fn trimmedOrDefault(slice: []const u8, default_value: []const u8) []const u8 {
     return if (trimmed.len == 0) default_value else trimmed;
 }
 
-fn derive(expr: []const u8, variable: []const u8) !void {
+fn derive(expr: []const u8, variable: []const u8, simplify: bool) !void {
     var arena = std.heap.ArenaAllocator.init(wasm_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -43,19 +43,23 @@ fn derive(expr: []const u8, variable: []const u8) !void {
     var expression = try Expression.parse(allocator, &registry, expr);
     defer expression.deinit();
 
-    var gradient = try expression.symbolicGradient(variable);
+    var gradient = if (simplify)
+        try expression.symbolicGradient(variable)
+    else
+        try expression.symbolicGradientRaw(variable);
     defer gradient.deinit();
 
     const grad_str = try gradient.toString();
     try setOutput(grad_str);
 }
 
-pub export fn zymbol_derive(expr_ptr: [*]const u8, expr_len: usize, var_ptr: [*]const u8, var_len: usize) i32 {
+pub export fn zymbol_derive(expr_ptr: [*]const u8, expr_len: usize, var_ptr: [*]const u8, var_len: usize, simplify_flag: u32) i32 {
     const expr_slice: []const u8 = if (expr_len == 0) "" else expr_ptr[0..expr_len];
     const var_slice: []const u8 = if (var_len == 0) "" else var_ptr[0..var_len];
 
     const expr = std.mem.trim(u8, expr_slice, " \t\r\n");
     const variable = trimmedOrDefault(var_slice, "x");
+    const simplify = simplify_flag != 0;
 
     if (expr.len == 0) {
         setErrorMessage("expression is empty") catch {};
@@ -67,7 +71,7 @@ pub export fn zymbol_derive(expr_ptr: [*]const u8, expr_len: usize, var_ptr: [*]
         return -1;
     }
 
-    if (derive(expr, variable)) |_| {
+    if (derive(expr, variable, simplify)) |_| {
         return 0;
     } else |err| {
         setError(err) catch {};

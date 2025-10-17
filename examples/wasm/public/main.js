@@ -41,6 +41,10 @@ async function main() {
   const deriveButton = document.getElementById('derive');
   const resultPre = document.getElementById('result');
   const statusP = document.getElementById('status');
+  const simplifyToggle = document.getElementById('simplify');
+  if (!(simplifyToggle instanceof HTMLInputElement)) {
+    throw new Error('missing simplify checkbox');
+  }
 
   async function deriveExpression() {
     statusP.hidden = true;
@@ -62,6 +66,7 @@ async function main() {
         exprRef.len,
         varRef.ptr,
         varRef.len,
+        simplifyToggle.checked ? 1 : 0,
       );
 
       const output = readResult(exports);
@@ -79,6 +84,7 @@ async function main() {
   }
 
   deriveButton.addEventListener('click', deriveExpression);
+  simplifyToggle.addEventListener('change', deriveExpression);
   exprInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       deriveExpression();
