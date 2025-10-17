@@ -3,27 +3,28 @@
 **Symbolic Automatic Differentiation for Zig**
 
 ```zig
+const std = @import("std");
 const zymbol = @import("zymbol");
 
-var registry = zymbol.OpRegistry.init(allocator);
+var registry = zymbol.Registry.init(allocator);
+defer registry.deinit();
 try registry.registerBuiltins();
 
-// Define function from string
-var f = try zymbol.parse(allocator, &registry, "x^2 + sin(x)");
-defer f.deinit();
+var expr = try zymbol.Expression.parse(allocator, &registry, "x^2 + sin(x)");
+defer expr.deinit();
 
-// Take derivatives symbolically
-var df = try zymbol.grad(f, "x");
-defer df.deinit();
+var inputs = std.StringHashMap(f32).init(allocator);
+defer inputs.deinit();
+try inputs.put("x", 1.5);
 
-// Compose derivatives
-var d2f = try zymbol.grad(df, "x");
-defer d2f.deinit();
+const value = try expr.evaluate(inputs);
+std.debug.print("f(1.5) = {d}\n", .{value});
 
-// Inspect the symbolic form
-const df_str = try df.toString();
-defer allocator.free(df_str);
-std.debug.print("df/dx = {s}\n", .{df_str});
+var grad_expr = try expr.symbolicGradient("x");
+defer grad_expr.deinit();
+
+const grad_value = try grad_expr.evaluate(inputs);
+std.debug.print("df/dx(1.5) = {d}\n", .{grad_value});
 ```
 
 ### Features:

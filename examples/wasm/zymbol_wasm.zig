@@ -1,9 +1,11 @@
 const std = @import("std");
 const zymbol = @import("zymbol");
+const Registry = zymbol.Registry;
+const Expression = zymbol.Expression;
 
 const wasm_allocator = std.heap.wasm_allocator;
 
-var output_buffer = std.ArrayListUnmanaged(u8){};
+var output_buffer: std.ArrayList(u8) = .empty;
 var output_len: usize = 0;
 var zero_byte: u8 = 0;
 
@@ -34,17 +36,17 @@ fn derive(expr: []const u8, variable: []const u8) !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var registry = zymbol.OpRegistry.init(allocator);
+    var registry = Registry.init(allocator);
     defer registry.deinit();
     try registry.registerBuiltins();
 
-    var graph = try zymbol.parse(allocator, &registry, expr);
-    defer graph.deinit();
+    var expression = try Expression.parse(allocator, &registry, expr);
+    defer expression.deinit();
 
-    var grad_graph = try zymbol.grad(&graph, variable);
-    defer grad_graph.deinit();
+    var gradient = try expression.symbolicGradient(variable);
+    defer gradient.deinit();
 
-    const grad_str = try grad_graph.toString();
+    const grad_str = try gradient.toString();
     try setOutput(grad_str);
 }
 
