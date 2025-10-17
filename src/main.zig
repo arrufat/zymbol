@@ -3,6 +3,7 @@ const zymbol = @import("zymbol");
 
 const Registry = zymbol.Registry;
 const Expression = zymbol.Expression;
+const Sample = struct { key: []const u8, value: f32 };
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -13,11 +14,23 @@ pub fn main() !void {
     defer registry.deinit();
     try registry.registerBuiltins();
 
-    demo(allocator, &registry, "relu(x)", "x", &.{ .{ "x", 2.0 }, .{ "x", -1.0 } });
-    demo(allocator, &registry, "sigmoid(x)", "x", &.{.{ "x", 0.0 }});
-    demo(allocator, &registry, "relu(x) * sigmoid(x)", "x", &.{.{ "x", 2.0 }});
-    demo(allocator, &registry, "x ^ 2", "x", &.{.{ "x", 3.0 }});
-    demo(allocator, &registry, "x ^ y", "x", &.{ .{ "x", 3.0 }, .{ "y", 2.0 } });
+    demo(allocator, &registry, "relu(x)", "x", &[_]Sample{
+        .{ .key = "x", .value = 2.0 },
+        .{ .key = "x", .value = -1.0 },
+    });
+    demo(allocator, &registry, "sigmoid(x)", "x", &[_]Sample{
+        .{ .key = "x", .value = 0.0 },
+    });
+    demo(allocator, &registry, "relu(x) * sigmoid(x)", "x", &[_]Sample{
+        .{ .key = "x", .value = 2.0 },
+    });
+    demo(allocator, &registry, "x ^ 2", "x", &[_]Sample{
+        .{ .key = "x", .value = 3.0 },
+    });
+    demo(allocator, &registry, "x ^ y", "x", &[_]Sample{
+        .{ .key = "x", .value = 3.0 },
+        .{ .key = "y", .value = 2.0 },
+    });
 }
 
 fn demo(
@@ -25,7 +38,7 @@ fn demo(
     registry: *Registry,
     source: []const u8,
     variable: []const u8,
-    samples: []const struct { key: []const u8, value: f32 },
+    samples: []const Sample,
 ) void {
     std.debug.print("\nf(x) = {s}\n", .{source});
 
