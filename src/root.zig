@@ -188,6 +188,32 @@ pub const OpRegistry = struct {
             }.tsg,
         });
 
+        // Guarded log that avoids NaNs when the input is non-positive
+        try self.register(.{
+            .name = "log_guard",
+            .arity = 1,
+            .forward = struct {
+                fn f(args: []const f32) f32 {
+                    return if (args[0] > 0.0) @log(args[0]) else 0.0;
+                }
+            }.f,
+            .backward = struct {
+                fn b(grad_output: f32, args: []const f32, arg_index: usize) f32 {
+                    _ = arg_index;
+                    if (args[0] > 0.0) {
+                        return grad_output / args[0];
+                    } else {
+                        return 0.0;
+                    }
+                }
+            }.b,
+            .toString = struct {
+                fn ts(args: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
+                    return try std.fmt.allocPrint(allocator, "log_guard({s})", .{args[0]});
+                }
+            }.ts,
+        });
+
         // ReLU - now it's just another custom op!
         try self.register(.{
             .name = "relu",
@@ -498,6 +524,7 @@ const ComputationGraph = struct {
 
     pub fn forward(self: *ComputationGraph, inputs: std.StringHashMap(f32)) ![]f32 {
         var values = try self.allocator.alloc(f32, self.nodes.items.len);
+        errdefer self.allocator.free(values);
 
         for (self.nodes.items, 0..) |node, i| {
             values[i] = switch (node.node_type) {
@@ -531,6 +558,7 @@ const ComputationGraph = struct {
 
     pub fn backward(self: *ComputationGraph, values: []f32) ![]f32 {
         var adjoints = try self.allocator.alloc(f32, self.nodes.items.len);
+        errdefer self.allocator.free(adjoints);
         @memset(adjoints, 0.0);
 
         adjoints[self.output_id] = 1.0;
@@ -567,7 +595,9 @@ const ComputationGraph = struct {
                     const b = values[node.inputs[1]];
                     const result = values[i];
                     adjoints[node.inputs[0]] += grd * b * std.math.pow(f32, a, b - 1.0);
-                    adjoints[node.inputs[1]] += grd * result * @log(a);
+                    if (a > 0.0) {
+                        adjoints[node.inputs[1]] += grd * result * @log(a);
+                    }
                 },
                 .log => {
                     const a = values[node.inputs[0]];
@@ -686,9 +716,12 @@ const ComputationGraph = struct {
                     const grad_a = try grad_graph.addBinaryOp(.mul, grad_of_node, deriv_a);
                     try accumulateGradient(&grad_graph, &grad_node_map, a_id, grad_a);
 
-                    // Gradient w.r.t. exponent: grad * a^b * ln(a)
+                    // Gradient w.r.t. exponent: grad * a^b * log_guard(a)
                     const a_pow_b = try grad_graph.addBinaryOp(.pow, a_node_in_grad, b_node_in_grad);
-                    const log_a = try grad_graph.addUnaryOp(.log, a_node_in_grad);
+                    const log_a = blk: {
+                        const args = [_]NodeId{ a_node_in_grad };
+                        break :blk try grad_graph.addCustomOp("log_guard", args[0..]);
+                    };
                     const deriv_b = try grad_graph.addBinaryOp(.mul, a_pow_b, log_a);
                     const grad_b = try grad_graph.addBinaryOp(.mul, grad_of_node, deriv_b);
                     try accumulateGradient(&grad_graph, &grad_node_map, b_id, grad_b);
@@ -992,6 +1025,20 @@ const Parser = struct {
 
         const token = self.tokens[self.pos];
 
+        switch (token) {
+            .plus => {
+                self.pos += 1;
+                return try self.parseUnary();
+            },
+            .minus => {
+                self.pos += 1;
+                const operand = try self.parseUnary();
+                const zero = try self.graph.addConstant(0.0);
+                return try self.graph.addBinaryOp(.sub, zero, operand);
+            },
+            else => {},
+        }
+
         // Check if it's a function call (identifier followed by lparen)
         if (token == .identifier) {
             if (self.pos + 1 < self.tokens.len and self.tokens[self.pos + 1] == .lparen) {
@@ -1197,6 +1244,63 @@ test "numeric gradient - relu" {
     // Gradient at negative point
     try inputs.put("x", -1.0);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), try graph.gradient("x", inputs), 0.0001);
+}
+
+test "power gradient exponent handles non-positive base" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "x ^ y");
+    defer graph.deinit();
+
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+    try inputs.put("x", 0.0);
+    try inputs.put("y", 2.0);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), try graph.gradient("y", inputs), 0.0001);
+
+    var grad_graph = try grad(&graph, "y");
+    defer grad_graph.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), try grad_graph.eval(inputs), 0.0001);
+
+    try inputs.put("x", -2.0);
+    try inputs.put("y", 2.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), try graph.gradient("y", inputs), 0.0001);
+
+    var grad_graph_neg = try grad(&graph, "y");
+    defer grad_graph_neg.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), try grad_graph_neg.eval(inputs), 0.0001);
+}
+
+test "unary parsing supports prefix operators" {
+    const allocator = std.testing.allocator;
+
+    var registry = OpRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.registerBuiltins();
+
+    var graph = try parse(allocator, &registry, "-x");
+    defer graph.deinit();
+
+    var inputs = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+    try inputs.put("x", 3.5);
+    try std.testing.expectApproxEqAbs(@as(f32, -3.5), try graph.eval(inputs), 0.0001);
+
+    var graph_nested = try parse(allocator, &registry, "-(x + 1)");
+    defer graph_nested.deinit();
+    try inputs.put("x", 2.0);
+    try std.testing.expectApproxEqAbs(@as(f32, -3.0), try graph_nested.eval(inputs), 0.0001);
+
+    var graph_plus = try parse(allocator, &registry, "+(x - 1)");
+    defer graph_plus.deinit();
+    try inputs.put("x", 4.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), try graph_plus.eval(inputs), 0.0001);
 }
 
 test "symbolic gradient - x^2" {
