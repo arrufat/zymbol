@@ -8,7 +8,7 @@ const zymbol = @import("zymbol");
 
 var registry = zymbol.Registry.init(allocator);
 defer registry.deinit();
-try registry.registerBuiltins();
+try zymbol.registerBuiltins(&registry);
 
 var expr = try zymbol.Expression.parse(allocator, &registry, "x^2 + sin(x)");
 defer expr.deinit();

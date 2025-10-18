@@ -38,7 +38,7 @@ fn derive(expr: []const u8, variable: []const u8, simplify: bool) !void {
 
     var registry = Registry.init(allocator);
     defer registry.deinit();
-    try registry.registerBuiltins();
+    try zymbol.registerBuiltins(&registry);
 
     var expression = try Expression.parse(allocator, &registry, expr);
     defer expression.deinit();

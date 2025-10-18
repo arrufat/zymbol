@@ -12,7 +12,7 @@ pub fn main() !void {
 
     var registry = Registry.init(allocator);
     defer registry.deinit();
-    try registry.registerBuiltins();
+    try zymbol.registerBuiltins(&registry);
 
     demo(allocator, &registry, "relu(x)", "x", &[_]Sample{
         .{ .key = "x", .value = 2.0 },
