@@ -19,6 +19,9 @@ pub const NodeKind = enum {
     sin,
     cos,
     tan,
+    sinh,
+    cosh,
+    tanh,
     custom,
 };
 
@@ -136,7 +139,7 @@ pub const Graph = struct {
                 const rhs = try self.copyNode(source, binary.rhs, map);
                 break :blk try self.addBinary(orig_node.kind, lhs, rhs);
             },
-            .log, .exp, .sin, .cos, .tan => blk: {
+            .log, .exp, .sin, .cos, .tan, .sinh, .cosh, .tanh => blk: {
                 const operand = try self.copyNode(source, orig_node.payload.unary, map);
                 break :blk try self.addUnary(orig_node.kind, operand);
             },

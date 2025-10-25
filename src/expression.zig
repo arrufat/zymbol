@@ -160,6 +160,20 @@ pub const Expression = struct {
                     const tan_val = @tan(operand_val);
                     adjoints[@intCast(operand)] += grad * (1.0 + (tan_val * tan_val));
                 },
+                .sinh => {
+                    const operand = node.payload.unary;
+                    adjoints[@intCast(operand)] += grad * std.math.cosh(values[@intCast(operand)]);
+                },
+                .cosh => {
+                    const operand = node.payload.unary;
+                    adjoints[@intCast(operand)] += grad * std.math.sinh(values[@intCast(operand)]);
+                },
+                .tanh => {
+                    const operand = node.payload.unary;
+                    const operand_val = values[@intCast(operand)];
+                    const tanh_val = std.math.tanh(operand_val);
+                    adjoints[@intCast(operand)] += grad * (1.0 - (tanh_val * tanh_val));
+                },
                 .custom => {
                     const custom = node.payload.custom;
                     var args: []f32 = try self.allocator.alloc(f32, custom.inputs.len);
@@ -206,6 +220,9 @@ fn evaluateNode(expr: *const Expression, node: Node, values: []f32, inputs: std.
         .sin => @sin(values[@intCast(node.payload.unary)]),
         .cos => @cos(values[@intCast(node.payload.unary)]),
         .tan => @tan(values[@intCast(node.payload.unary)]),
+        .sinh => std.math.sinh(values[@intCast(node.payload.unary)]),
+        .cosh => std.math.cosh(values[@intCast(node.payload.unary)]),
+        .tanh => std.math.tanh(values[@intCast(node.payload.unary)]),
         .custom => blk: {
             const custom = node.payload.custom;
             var args: []f32 = try expr.allocator.alloc(f32, custom.inputs.len);
@@ -234,6 +251,9 @@ fn renderNode(expr: *const Expression, id: NodeId, cache: *std.AutoHashMap(NodeI
         .sin => try renderCall(expr, cache, "sin", node.payload.unary),
         .cos => try renderCall(expr, cache, "cos", node.payload.unary),
         .tan => try renderCall(expr, cache, "tan", node.payload.unary),
+        .sinh => try renderCall(expr, cache, "sinh", node.payload.unary),
+        .cosh => try renderCall(expr, cache, "cosh", node.payload.unary),
+        .tanh => try renderCall(expr, cache, "tanh", node.payload.unary),
         .custom => blk: {
             const custom = node.payload.custom;
             var args = try expr.allocator.alloc([]const u8, custom.inputs.len);

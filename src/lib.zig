@@ -181,3 +181,27 @@ test "tan gradient matches numeric" {
     const symbolic = try grad_expr.evaluate(inputs);
     try std.testing.expectApproxEqAbs(symbolic, numeric, 0.0001);
 }
+
+test "hyperbolic gradients match numeric" {
+    const allocator = std.testing.allocator;
+    var registry: Registry = Registry.init(allocator);
+    defer registry.deinit();
+    try registerBuiltins(&registry);
+
+    var expr: Expression = try Expression.parse(allocator, &registry, "sinh(x) + cosh(x) + tanh(x)");
+    defer expr.deinit();
+
+    var inputs: std.StringHashMap(f32) = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+    const value: f32 = 0.3;
+    try inputs.put("x", value);
+
+    const numeric = try expr.numericGradient("x", inputs);
+    var grad_expr: Expression = try expr.symbolicGradient("x");
+    defer grad_expr.deinit();
+    const symbolic = try grad_expr.evaluate(inputs);
+    try std.testing.expectApproxEqAbs(symbolic, numeric, 0.0001);
+
+    const expected_val = std.math.sinh(value) + std.math.cosh(value) + std.math.tanh(value);
+    try std.testing.expectApproxEqAbs(expected_val, try expr.evaluate(inputs), 0.0001);
+}

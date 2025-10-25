@@ -210,6 +210,30 @@ fn propagate(ctx: *SymbolicContext, node_id: NodeId, node: Node, upstream: NodeI
             const grad_val = try ctx.binary(.mul, upstream, local_grad);
             try ctx.accumulate(operand, grad_val);
         },
+        .sinh => {
+            const operand = node.payload.unary;
+            const copy = try ctx.ensureNode(operand);
+            const cosh_val = try ctx.unary(.cosh, copy);
+            const grad_val = try ctx.binary(.mul, upstream, cosh_val);
+            try ctx.accumulate(operand, grad_val);
+        },
+        .cosh => {
+            const operand = node.payload.unary;
+            const copy = try ctx.ensureNode(operand);
+            const sinh_val = try ctx.unary(.sinh, copy);
+            const grad_val = try ctx.binary(.mul, upstream, sinh_val);
+            try ctx.accumulate(operand, grad_val);
+        },
+        .tanh => {
+            const operand = node.payload.unary;
+            const copy = try ctx.ensureNode(operand);
+            const tanh_val = try ctx.unary(.tanh, copy);
+            const tanh_sq = try ctx.binary(.mul, tanh_val, tanh_val);
+            const one = try ctx.constant(1.0);
+            const local_grad = try ctx.binary(.sub, one, tanh_sq);
+            const grad_val = try ctx.binary(.mul, upstream, local_grad);
+            try ctx.accumulate(operand, grad_val);
+        },
         .custom => {
             const custom = node.payload.custom;
             if (custom.op.symbolic) |rule| {

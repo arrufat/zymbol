@@ -43,7 +43,7 @@ std.debug.print("df/dx(1.5) = {d}\n", .{grad_value});
 - Unary prefixes `+` and `-` are supported (`-x`, `-(x + 1)`).
 - Parentheses group sub-expressions.
 - Function calls invoke registered operations (`sin(x)`, `max(x, y)`, etc.).
-- Built-in math functions include `log`, `exp`, `sin`, `cos`, and `tan`; additional ops can be registered at runtime.
+- Built-in math functions include `log`, `exp`, `sin`, `cos`, `tan`, `sinh`, `cosh`, and `tanh`; additional ops can be registered at runtime.
 
 ### WebAssembly Playground
 Build an interactive derivative playground that runs entirely in the browser:
