@@ -125,13 +125,6 @@ const Simplifier = struct {
             return self.simplifyMul(two, lhs);
         }
 
-        if (self.negatedOperand(lhs)) |neg| {
-            return self.simplifySub(rhs, neg);
-        }
-        if (self.negatedOperand(rhs)) |neg| {
-            return self.simplifySub(lhs, neg);
-        }
-
         var terms: std.ArrayList(NodeId) = .empty;
         defer terms.deinit(self.allocator);
 
@@ -141,17 +134,50 @@ const Simplifier = struct {
         try self.collectAddTerms(lhs, &terms, &const_sum, &has_const);
         try self.collectAddTerms(rhs, &terms, &const_sum, &has_const);
 
-        var result: ?NodeId = null;
+        var positives: std.ArrayList(NodeId) = .empty;
+        defer positives.deinit(self.allocator);
+        var negatives: std.ArrayList(NodeId) = .empty;
+        defer negatives.deinit(self.allocator);
+
         for (terms.items) |term| {
-            result = try self.appendAddTerm(result, term);
+            var partition = try self.partitionAddTerm(term);
+            defer partition.deinit(self.allocator);
+            for (partition.positives.items) |p| try positives.append(self.allocator, p);
+            for (partition.negatives.items) |n| try negatives.append(self.allocator, n);
         }
 
         if (has_const and !approxZero(const_sum)) {
-            const const_node = try self.target.addConstant(const_sum);
-            result = try self.appendAddTerm(result, const_node);
+            if (const_sum > 0) {
+                const node = try self.target.addConstant(const_sum);
+                try positives.append(self.allocator, node);
+            } else {
+                const node = try self.target.addConstant(-const_sum);
+                try negatives.append(self.allocator, node);
+            }
         }
 
-        return result orelse try self.target.addConstant(0.0);
+        var positive_node: ?NodeId = null;
+        for (positives.items) |term| {
+            positive_node = if (positive_node) |acc|
+                try self.target.addBinary(.add, acc, term)
+            else
+                term;
+        }
+
+        var negative_node: ?NodeId = null;
+        for (negatives.items) |term| {
+            negative_node = if (negative_node) |acc|
+                try self.target.addBinary(.add, acc, term)
+            else
+                term;
+        }
+
+        if (negative_node) |neg| {
+            const base = positive_node orelse try self.target.addConstant(0.0);
+            return self.target.addBinary(.sub, base, neg);
+        }
+
+        return positive_node orelse try self.target.addConstant(0.0);
     }
 
     fn simplifySub(self: *Simplifier, lhs: NodeId, rhs: NodeId) Error!NodeId {
@@ -486,16 +512,62 @@ const Simplifier = struct {
         return null;
     }
 
-    fn appendAddTerm(self: *Simplifier, current: ?NodeId, term: NodeId) Error!NodeId {
-        if (self.negatedOperand(term)) |positive| {
-            const lhs = current orelse try self.target.addConstant(0.0);
-            return self.target.addBinary(.sub, lhs, positive);
+    const Partition = struct {
+        positives: std.ArrayList(NodeId),
+        negatives: std.ArrayList(NodeId),
+
+        fn init() Partition {
+            return .{ .positives = .empty, .negatives = .empty };
         }
-        return if (current) |acc|
-            try self.target.addBinary(.add, acc, term)
-        else
-            term;
+
+        fn deinit(self: *Partition, allocator: std.mem.Allocator) void {
+            self.positives.deinit(allocator);
+            self.negatives.deinit(allocator);
+        }
+    };
+
+    fn partitionAddTerm(self: *Simplifier, id: NodeId) Error!Partition {
+        var part = Partition.init();
+        errdefer part.deinit(self.allocator);
+
+        const node = self.target.node(id);
+        switch (node.kind) {
+            .add => {
+                const binary = node.payload.binary;
+                var left = try self.partitionAddTerm(binary.lhs);
+                defer left.deinit(self.allocator);
+                for (left.positives.items) |p| try part.positives.append(self.allocator, p);
+                for (left.negatives.items) |n| try part.negatives.append(self.allocator, n);
+
+                var right = try self.partitionAddTerm(binary.rhs);
+                defer right.deinit(self.allocator);
+                for (right.positives.items) |p| try part.positives.append(self.allocator, p);
+                for (right.negatives.items) |n| try part.negatives.append(self.allocator, n);
+            },
+            .sub => {
+                const binary = node.payload.binary;
+                var left = try self.partitionAddTerm(binary.lhs);
+                defer left.deinit(self.allocator);
+                for (left.positives.items) |p| try part.positives.append(self.allocator, p);
+                for (left.negatives.items) |n| try part.negatives.append(self.allocator, n);
+
+                var right = try self.partitionAddTerm(binary.rhs);
+                defer right.deinit(self.allocator);
+                for (right.positives.items) |p| try part.negatives.append(self.allocator, p);
+                for (right.negatives.items) |n| try part.positives.append(self.allocator, n);
+            },
+            else => {
+                if (self.negatedOperand(id)) |inner| {
+                    try part.negatives.append(self.allocator, inner);
+                } else {
+                    try part.positives.append(self.allocator, id);
+                }
+            },
+        }
+
+        return part;
     }
+
 };
 
 fn approxEqual(lhs: f32, rhs: f32) bool {
