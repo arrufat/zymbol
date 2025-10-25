@@ -205,3 +205,39 @@ test "hyperbolic gradients match numeric" {
     const expected_val = std.math.sinh(value) + std.math.cosh(value) + std.math.tanh(value);
     try std.testing.expectApproxEqAbs(expected_val, try expr.evaluate(inputs), 0.0001);
 }
+
+test "demo expression simplifies to simple derivative" {
+    const allocator = std.testing.allocator;
+    var registry: Registry = Registry.init(allocator);
+    defer registry.deinit();
+    try registerBuiltins(&registry);
+
+    const source = "((cosh(0) * exp(0) - sin(0)) * x) + ((log(1) + tan(0)) * tanh(x))";
+    var expr: Expression = try Expression.parse(allocator, &registry, source);
+    defer expr.deinit();
+
+    var grad_expr: Expression = try expr.symbolicGradient("x");
+    defer grad_expr.deinit();
+    const grad_str = try grad_expr.toString();
+    defer allocator.free(grad_str);
+
+    try std.testing.expect(std.mem.eql(u8, grad_str, "1"));
+}
+
+test "negated sum becomes subtraction" {
+    const allocator = std.testing.allocator;
+    var registry: Registry = Registry.init(allocator);
+    defer registry.deinit();
+    try registerBuiltins(&registry);
+
+    var expr: Expression = try Expression.parse(allocator, &registry, "((-1 * (sin(x) * sin(x))) + (cos(x) * cos(x)))");
+    defer expr.deinit();
+
+    var simplified: Expression = try expr.simplify();
+    defer simplified.deinit();
+
+    const str = try simplified.toString();
+    defer allocator.free(str);
+
+    try std.testing.expect(std.mem.eql(u8, str, "((cos(x) ^ 2) - (sin(x) ^ 2))"));
+}

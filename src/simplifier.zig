@@ -125,6 +125,13 @@ const Simplifier = struct {
             return self.simplifyMul(two, lhs);
         }
 
+        if (self.negatedOperand(lhs)) |neg| {
+            return self.simplifySub(rhs, neg);
+        }
+        if (self.negatedOperand(rhs)) |neg| {
+            return self.simplifySub(lhs, neg);
+        }
+
         var terms: std.ArrayList(NodeId) = .empty;
         defer terms.deinit(self.allocator);
 
@@ -470,6 +477,19 @@ const Simplifier = struct {
                 break :blk true;
             },
         };
+    }
+
+    fn negatedOperand(self: *Simplifier, id: NodeId) ?NodeId {
+        const node = self.target.node(id);
+        if (node.kind != .mul) return null;
+        const binary = node.payload.binary;
+        if (self.constantValue(binary.lhs)) |lhs_val| {
+            if (approxEqual(lhs_val, -1.0)) return binary.rhs;
+        }
+        if (self.constantValue(binary.rhs)) |rhs_val| {
+            if (approxEqual(rhs_val, -1.0)) return binary.lhs;
+        }
+        return null;
     }
 };
 
