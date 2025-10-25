@@ -143,18 +143,12 @@ const Simplifier = struct {
 
         var result: ?NodeId = null;
         for (terms.items) |term| {
-            result = if (result) |acc|
-                try self.target.addBinary(.add, acc, term)
-            else
-                term;
+            result = try self.appendAddTerm(result, term);
         }
 
         if (has_const and !approxZero(const_sum)) {
             const const_node = try self.target.addConstant(const_sum);
-            result = if (result) |acc|
-                try self.target.addBinary(.add, acc, const_node)
-            else
-                const_node;
+            result = try self.appendAddTerm(result, const_node);
         }
 
         return result orelse try self.target.addConstant(0.0);
@@ -490,6 +484,17 @@ const Simplifier = struct {
             if (approxEqual(rhs_val, -1.0)) return binary.lhs;
         }
         return null;
+    }
+
+    fn appendAddTerm(self: *Simplifier, current: ?NodeId, term: NodeId) Error!NodeId {
+        if (self.negatedOperand(term)) |positive| {
+            const lhs = current orelse try self.target.addConstant(0.0);
+            return self.target.addBinary(.sub, lhs, positive);
+        }
+        return if (current) |acc|
+            try self.target.addBinary(.add, acc, term)
+        else
+            term;
     }
 };
 
