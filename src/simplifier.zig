@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const graph_mod = @import("graph.zig");
+const DynamicBitSet = std.bit_set.DynamicBitSet;
 
 pub const Error = types.Error;
 pub const NodeId = types.NodeId;
@@ -220,7 +221,17 @@ const Simplifier = struct {
             }
         }
 
-        for (factors.items) |factor| {
+        var factor_slice = factors.items;
+        var combined_storage = std.ArrayList(NodeId).empty;
+        var using_combined = false;
+        if (factor_slice.len > 1 and self.hasDuplicateFactors(factor_slice)) {
+            combined_storage = try self.combineDuplicateFactors(factor_slice);
+            factor_slice = combined_storage.items;
+            using_combined = true;
+        }
+        defer if (using_combined) combined_storage.deinit(self.allocator);
+
+        for (factor_slice) |factor| {
             result = if (result) |acc|
                 try self.target.addBinary(.mul, acc, factor)
             else
@@ -391,6 +402,74 @@ const Simplifier = struct {
             },
             else => try factors.append(self.allocator, id),
         }
+    }
+
+    fn hasDuplicateFactors(self: *Simplifier, factors: []const NodeId) bool {
+        for (factors, 0..) |factor, idx| {
+            var other = idx + 1;
+            while (other < factors.len) : (other += 1) {
+                if (self.nodesEqual(factor, factors[other])) return true;
+            }
+        }
+        return false;
+    }
+
+    fn combineDuplicateFactors(self: *Simplifier, factors: []const NodeId) Error!std.ArrayList(NodeId) {
+        var result: std.ArrayList(NodeId) = .empty;
+        errdefer result.deinit(self.allocator);
+        try result.ensureTotalCapacityPrecise(self.allocator, factors.len);
+
+        var consumed = try DynamicBitSet.initEmpty(self.allocator, factors.len);
+        defer consumed.deinit();
+
+        for (factors, 0..) |factor, idx| {
+            if (consumed.isSet(idx)) continue;
+            var count: u32 = 1;
+            var other = idx + 1;
+            while (other < factors.len) : (other += 1) {
+                if (consumed.isSet(other)) continue;
+                if (self.nodesEqual(factor, factors[other])) {
+                    consumed.set(other);
+                    count += 1;
+                }
+            }
+
+            var node = factor;
+            if (count > 1) {
+                const exponent_value: f32 = @floatFromInt(count);
+                const exponent = try self.target.addConstant(exponent_value);
+                node = try self.simplifyPow(factor, exponent);
+            }
+            try result.append(self.allocator, node);
+        }
+
+        return result;
+    }
+
+    fn nodesEqual(self: *Simplifier, a: NodeId, b: NodeId) bool {
+        if (a == b) return true;
+        const node_a = self.target.node(a);
+        const node_b = self.target.node(b);
+        if (node_a.kind != node_b.kind) return false;
+        return switch (node_a.kind) {
+            .input => std.mem.eql(u8, node_a.payload.input, node_b.payload.input),
+            .constant => approxEqual(node_a.payload.constant, node_b.payload.constant),
+            .add, .sub, .mul, .div, .pow =>
+                self.nodesEqual(node_a.payload.binary.lhs, node_b.payload.binary.lhs) and
+                self.nodesEqual(node_a.payload.binary.rhs, node_b.payload.binary.rhs),
+            .log, .exp, .sin, .cos, .tan, .sinh, .cosh, .tanh =>
+                self.nodesEqual(node_a.payload.unary, node_b.payload.unary),
+            .custom => blk: {
+                const custom_a = node_a.payload.custom;
+                const custom_b = node_b.payload.custom;
+                if (custom_a.op != custom_b.op) break :blk false;
+                if (custom_a.inputs.len != custom_b.inputs.len) break :blk false;
+                for (custom_a.inputs, 0..) |child, idx| {
+                    if (!self.nodesEqual(child, custom_b.inputs[idx])) break :blk false;
+                }
+                break :blk true;
+            },
+        };
     }
 };
 
