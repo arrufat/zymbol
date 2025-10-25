@@ -91,6 +91,7 @@ const Simplifier = struct {
             .exp => try self.simplifyUnary(.exp, try self.simplifyNode(node.payload.unary)),
             .sin => try self.simplifyUnary(.sin, try self.simplifyNode(node.payload.unary)),
             .cos => try self.simplifyUnary(.cos, try self.simplifyNode(node.payload.unary)),
+            .tan => try self.simplifyUnary(.tan, try self.simplifyNode(node.payload.unary)),
             .custom => blk: {
                 const custom = node.payload.custom;
                 var simplified_inputs: []NodeId = try self.allocator.alloc(NodeId, custom.inputs.len);
@@ -309,6 +310,7 @@ const Simplifier = struct {
                 .exp => @exp(value),
                 .sin => @sin(value),
                 .cos => @cos(value),
+                .tan => @tan(value),
                 else => value,
             };
             if (std.math.isFinite(folded)) return self.target.addConstant(folded);

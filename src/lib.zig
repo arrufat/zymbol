@@ -157,3 +157,27 @@ test "division recognizes reciprocal" {
 
     try std.testing.expect(std.mem.eql(u8, simplified_str, "(x * y)"));
 }
+
+test "tan gradient matches numeric" {
+    const allocator = std.testing.allocator;
+    var registry: Registry = Registry.init(allocator);
+    defer registry.deinit();
+    try registerBuiltins(&registry);
+
+    var expr: Expression = try Expression.parse(allocator, &registry, "tan(x)");
+    defer expr.deinit();
+
+    var inputs: std.StringHashMap(f32) = std.StringHashMap(f32).init(allocator);
+    defer inputs.deinit();
+    const angle: f32 = 0.5;
+    try inputs.put("x", angle);
+
+    const value = try expr.evaluate(inputs);
+    try std.testing.expectApproxEqAbs(@tan(angle), value, 0.0001);
+
+    const numeric = try expr.numericGradient("x", inputs);
+    var grad_expr: Expression = try expr.symbolicGradient("x");
+    defer grad_expr.deinit();
+    const symbolic = try grad_expr.evaluate(inputs);
+    try std.testing.expectApproxEqAbs(symbolic, numeric, 0.0001);
+}

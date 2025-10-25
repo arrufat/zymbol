@@ -154,6 +154,12 @@ pub const Expression = struct {
                     const operand = node.payload.unary;
                     adjoints[@intCast(operand)] -= grad * @sin(values[@intCast(operand)]);
                 },
+                .tan => {
+                    const operand = node.payload.unary;
+                    const operand_val = values[@intCast(operand)];
+                    const tan_val = @tan(operand_val);
+                    adjoints[@intCast(operand)] += grad * (1.0 + (tan_val * tan_val));
+                },
                 .custom => {
                     const custom = node.payload.custom;
                     var args: []f32 = try self.allocator.alloc(f32, custom.inputs.len);
@@ -199,6 +205,7 @@ fn evaluateNode(expr: *const Expression, node: Node, values: []f32, inputs: std.
         .exp => @exp(values[@intCast(node.payload.unary)]),
         .sin => @sin(values[@intCast(node.payload.unary)]),
         .cos => @cos(values[@intCast(node.payload.unary)]),
+        .tan => @tan(values[@intCast(node.payload.unary)]),
         .custom => blk: {
             const custom = node.payload.custom;
             var args: []f32 = try expr.allocator.alloc(f32, custom.inputs.len);
@@ -226,6 +233,7 @@ fn renderNode(expr: *const Expression, id: NodeId, cache: *std.AutoHashMap(NodeI
         .exp => try renderCall(expr, cache, "exp", node.payload.unary),
         .sin => try renderCall(expr, cache, "sin", node.payload.unary),
         .cos => try renderCall(expr, cache, "cos", node.payload.unary),
+        .tan => try renderCall(expr, cache, "tan", node.payload.unary),
         .custom => blk: {
             const custom = node.payload.custom;
             var args = try expr.allocator.alloc([]const u8, custom.inputs.len);

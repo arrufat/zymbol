@@ -206,6 +206,10 @@ pub const Parser = struct {
             if (args.len != 1) return Error.ArityMismatch;
             return self.graph.addUnary(.cos, args[0]);
         }
+        if (std.mem.eql(u8, name, "tan")) {
+            if (args.len != 1) return Error.ArityMismatch;
+            return self.graph.addUnary(.tan, args[0]);
+        }
         const op = self.registry.get(name) orelse return Error.UnknownFunction;
         return self.graph.addCustom(op, args);
     }
